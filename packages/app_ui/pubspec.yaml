@@ -7,31 +7,34 @@ environment:
   sdk: ^3.5.0
   flutter: ^3.24.0
 
+resolution: workspace
 dependencies:
   flutter:
     sdk: flutter
   flutter_svg: ^2.0.5
-  hugeicons: ^0.0.7
-  extended_image: ^8.1.0
+  hugeicons: ^1.1.5
+  extended_image: ^10.0.1
   cached_network_image: ^3.2.0
   open_filex: ^4.4.0
-  flutter_platform_widgets: ^7.0.1
+  flutter_platform_widgets: ^9.0.0
   enough_platform_widgets: ^1.1.1
   photo_view: ^0.15.0
   build_runner:
   flutter_gen_runner:
   intl: ^0.20.2
-  calendar_date_picker2: ^1.1.8
+  calendar_date_picker2: ^2.0.1
   flutter_screenutil: ^5.9.3
-  smooth_sheets: ^0.11.0
+  smooth_sheets: ^0.16.0
   flutter_cache_manager: ^3.4.1
   skeletonizer: ^2.1.0+1
+  fluttertoast: ^9.0.0
+  flutter_animate: ^4.5.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   mocktail: ^1.0.4
-  very_good_analysis: ^6.0.0
+  very_good_analysis: ^10.1.0
 
 flutter_gen:
   assets:

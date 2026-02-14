@@ -1,20 +1,16 @@
 name: secure_storage
 description: Storage that saves data in the device's persistent memory.
 publish_to: none
-
 environment:
   sdk: '>=3.7.0 <4.0.0'
   flutter: ">=1.17.0"
-
+resolution: workspace
 dependencies:
   flutter:
     sdk: flutter
-
-  flutter_secure_storage: ^8.0.0
+  flutter_secure_storage: ^10.0.0
   storage: 
-    path: ../storage
-
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  very_good_analysis: ^6.0.0
+  very_good_analysis: ^10.1.0

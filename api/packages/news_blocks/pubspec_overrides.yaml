@@ -1,3 +1,0 @@
-# melos_managed_dependency_overrides: frontend_server_client
-dependency_overrides:
-  frontend_server_client: ^4.0.0

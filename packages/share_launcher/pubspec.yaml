@@ -4,13 +4,14 @@ version: 1.0.0+1
 publish_to: none
 
 environment:
-  sdk: ">=3.0.0 <4.0.0"
+  sdk: ">=3.7.0 <4.0.0"
 
+resolution: workspace
 dependencies:
   equatable: ^2.0.3
   flutter:
     sdk: flutter
-  share_plus: ^10.0.0
+  share_plus: ^12.0.1
   share_plus_platform_interface: ^5.0.0
 
 dev_dependencies:
@@ -19,4 +20,4 @@ dev_dependencies:
   mocktail: ^1.0.4
   plugin_platform_interface: ^2.1.2
   url_launcher_platform_interface: ^2.0.5
-  very_good_analysis: ^6.0.0
+  very_good_analysis: ^10.1.0

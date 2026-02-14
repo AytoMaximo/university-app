@@ -4,11 +4,12 @@ version: 1.0.0+1
 publish_to: none
 
 environment:
-  sdk: ">=3.0.0 <4.0.0"
+  sdk: ">=3.7.0 <4.0.0"
 
+resolution: workspace
 dependencies:
   equatable: ^2.0.3
 
 dev_dependencies:
   test: ^1.21.4
-  very_good_analysis: ^6.0.0
+  very_good_analysis: ^10.1.0

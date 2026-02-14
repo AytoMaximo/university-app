@@ -6,6 +6,7 @@ publish_to: none
 environment:
   sdk: ">=3.5.1"
 
+resolution: workspace
 dependencies:
   flutter:
     sdk: flutter
@@ -18,4 +19,4 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   mocktail: ^1.0.4
-  very_good_analysis: ^6.0.0
+  very_good_analysis: ^10.1.0

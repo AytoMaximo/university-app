@@ -2,19 +2,16 @@ name: ads_ui
 description: A Flutter package that contains UI components for Yandex Ads.
 version: 1.0.0+1
 publish_to: none
-
 environment:
-  sdk: ">=2.19.3 <4.0.0"
-
+  sdk: ">=3.7.0 <4.0.0"
+resolution: workspace
 dependencies:
-  app_ui:
-    path: ../app_ui
+  app_ui: any
   cached_network_image: ^3.3.1
   flutter:
     sdk: flutter
-  flutter_html: 3.0.0-beta.2
-  news_blocks:
-    path: ../../api/packages/news_blocks
+  flutter_html: ^3.0.0
+  news_blocks: any
   path_provider_platform_interface: ^2.0.5
   platform: ^3.1.0
   plugin_platform_interface: ^2.1.3
@@ -23,7 +20,6 @@ dependencies:
   video_player: ^2.7.0
   video_player_platform_interface: ^6.0.1
   yandex_mobileads: ^7.9.0
-
 dev_dependencies:
   build_runner: ^2.0.3
   fake_async: ^1.3.0
@@ -34,13 +30,11 @@ dev_dependencies:
   mocktail: ^1.0.2
   mocktail_image_network: ^1.0.0
   sqflite_common_ffi: ^2.3.3
-  very_good_analysis: ^6.0.0
-
+  very_good_analysis: ^10.1.0
 flutter:
   uses-material-design: true
   assets:
     - assets/icons/
-
 flutter_gen:
   assets:
     enabled: true
@@ -48,6 +42,5 @@ flutter_gen:
       package_parameter_enabled: true
   output: lib/src/generated/
   line_length: 80
-
   integrations:
     flutter_svg: true

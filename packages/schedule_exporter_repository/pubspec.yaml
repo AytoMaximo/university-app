@@ -2,10 +2,9 @@ name: schedule_exporter_repository
 description: Export schedule to device calendar
 version: 0.1.0+1
 publish_to: none
-
 environment:
-  sdk: ">=3.1.1"
-
+  sdk: ">=3.7.0 <4.0.0"
+resolution: workspace
 dependencies:
   collection: ^1.18.0
   device_calendar:
@@ -15,11 +14,9 @@ dependencies:
   flutter:
     sdk: flutter
   timezone: ^0.10.0
-  university_app_server_api:
-    path: ../../api
-
+  university_app_server_api: any
 dev_dependencies:
   flutter_test:
     sdk: flutter
   mocktail: ^1.0.4
-  very_good_analysis: ^6.0.0
+  very_good_analysis: ^10.1.0
