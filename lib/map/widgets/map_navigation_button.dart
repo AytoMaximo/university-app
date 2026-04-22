@@ -7,13 +7,11 @@ class MapNavigationButton extends StatelessWidget {
     required this.floor,
     required this.onClick,
     required this.isSelected,
-    required this.hasRouteSegment,
   });
 
   final int floor;
   final Function onClick;
   final bool isSelected;
-  final bool hasRouteSegment;
 
   @override
   Widget build(BuildContext context) {
@@ -32,31 +30,17 @@ class MapNavigationButton extends StatelessWidget {
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.0)),
           ),
         ),
-        child: Stack(
-          alignment: Alignment.center,
-          children: <Widget>[
-            Text(
-              floor.toString(),
-              style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                color:
-                    isSelected
-                        ? Theme.of(context).extension<AppColors>()!.active
-                        : Theme.of(context).extension<AppColors>()!.deactive,
-                fontWeight: FontWeight.w700,
-              ),
+        child: Center(
+          child: Text(
+            floor.toString(),
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(
+              color:
+                  isSelected
+                      ? Theme.of(context).extension<AppColors>()!.active
+                      : Theme.of(context).extension<AppColors>()!.deactive,
+              fontWeight: FontWeight.w700,
             ),
-            if (hasRouteSegment)
-              Positioned(
-                bottom: 6,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFC857),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: const SizedBox(width: 18, height: 4),
-                ),
-              ),
-          ],
+          ),
         ),
         onPressed: () => onClick(),
       ),

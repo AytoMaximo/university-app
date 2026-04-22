@@ -141,7 +141,6 @@ class _MapPageViewState extends State<MapPageView> {
 
             final bool isLandscape =
                 MediaQuery.of(context).orientation == Orientation.landscape;
-            final Set<String> routeFloorIds = _routeFloorIds(state);
             return Stack(
               children: <Widget>[
                 Column(
@@ -263,9 +262,6 @@ class _MapPageViewState extends State<MapPageView> {
                                       isSelected:
                                           state.selectedFloor.number ==
                                           floor.number,
-                                      hasRouteSegment: routeFloorIds.contains(
-                                        floor.id,
-                                      ),
                                       onClick: () {
                                         context.read<MapBloc>().add(
                                           FloorSelected(
@@ -289,9 +285,6 @@ class _MapPageViewState extends State<MapPageView> {
                                       isSelected:
                                           state.selectedFloor.number ==
                                           floor.number,
-                                      hasRouteSegment: routeFloorIds.contains(
-                                        floor.id,
-                                      ),
                                       onClick: () {
                                         context.read<MapBloc>().add(
                                           FloorSelected(
@@ -629,17 +622,6 @@ class _MapPageViewState extends State<MapPageView> {
               segment.floorId == state.selectedFloor.id,
         )
         .toList(growable: false);
-  }
-
-  Set<String> _routeFloorIds(MapLoaded state) {
-    final MapRouteResult? routeResult = state.routeState.result;
-    if (routeResult == null) {
-      return <String>{};
-    }
-
-    return routeResult.segments
-        .map((MapRouteSegment segment) => segment.floorId)
-        .toSet();
   }
 }
 
