@@ -1,0 +1,92 @@
+name: Deploy map to MSK
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-map-msk
+  cancel-in-progress: true
+
+env:
+  MAP_DOMAIN: map.aytomaximo.ru
+  MAP_MSK_HOST: 157.22.230.121
+  MAP_MSK_PORT: "22"
+  MAP_MSK_USER: root
+  MAP_SERVICE: map-front-proxy-msk.service
+  MAP_BASE_DIR: /srv/map.aytomaximo.ru
+
+jobs:
+  deploy:
+    name: Build and deploy static map
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version-file: .fvmrc
+          cache: true
+
+      - name: Build standalone map
+        run: |
+          cp tools/pubspec_map_web.yaml pubspec.yaml
+          rm -f pubspec.lock
+          flutter pub get
+          flutter build web --release --target lib/main/main_map_web.dart
+          release="$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_SHA::12}"
+          archive="map-web-${release}.tar.gz"
+          tar -czf "$archive" -C build/web .
+          echo "release=$release" >> "$GITHUB_ENV"
+          echo "archive=$archive" >> "$GITHUB_ENV"
+          du -sh build/web "$archive"
+
+      - name: Configure SSH
+        env:
+          MAP_MSK_SSH_PRIVATE_KEY: ${{ secrets.MAP_MSK_SSH_PRIVATE_KEY }}
+          MAP_MSK_KNOWN_HOSTS: ${{ secrets.MAP_MSK_KNOWN_HOSTS }}
+        run: |
+          if [ -z "$MAP_MSK_SSH_PRIVATE_KEY" ]; then
+            echo "::error::Missing MAP_MSK_SSH_PRIVATE_KEY secret"
+            exit 1
+          fi
+          if [ -z "$MAP_MSK_KNOWN_HOSTS" ]; then
+            echo "::error::Missing MAP_MSK_KNOWN_HOSTS secret"
+            exit 1
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$MAP_MSK_SSH_PRIVATE_KEY" > ~/.ssh/map_msk
+          chmod 600 ~/.ssh/map_msk
+          printf '%s\n' "$MAP_MSK_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Upload release archive
+        run: |
+          scp -i ~/.ssh/map_msk -o IdentitiesOnly=yes -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes -P "$MAP_MSK_PORT" "$archive" "$MAP_MSK_USER@$MAP_MSK_HOST:/root/$archive"
+
+      - name: Activate release
+        run: |
+          ssh -i ~/.ssh/map_msk -o IdentitiesOnly=yes -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes -p "$MAP_MSK_PORT" "$MAP_MSK_USER@$MAP_MSK_HOST" \
+            "MAP_DOMAIN='$MAP_DOMAIN' MAP_MSK_HOST='$MAP_MSK_HOST' MAP_BASE_DIR='$MAP_BASE_DIR' MAP_SERVICE='$MAP_SERVICE' release='$release' archive='/root/$archive' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+
+          release_dir="${MAP_BASE_DIR}/releases/${release}"
+          current_link="${MAP_BASE_DIR}/current"
+          mkdir -p "$release_dir"
+          tar -xzf "$archive" -C "$release_dir"
+          test -f "$release_dir/index.html"
+          chmod -R a+rX "$MAP_BASE_DIR"
+          ln -sfn "$release_dir" "$current_link"
+          rm -f "$archive"
+          nginx -p /root/map-front-proxy-msk -c nginx.conf -t
+          systemctl reload "$MAP_SERVICE"
+          curl --fail --silent --show-error --max-time 20 --resolve "${MAP_DOMAIN}:443:${MAP_MSK_HOST}" "https://${MAP_DOMAIN}/version.json"
+          du -sh "$release_dir"
+          REMOTE
