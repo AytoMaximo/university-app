@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:app_ui/src/colors/colors.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -52,6 +54,8 @@ class _MapPageViewState extends State<MapPageView> {
 
   late final TextEditingController _searchController = TextEditingController();
   late final FocusNode _searchFocusNode = FocusNode();
+  Timer? _hideSearchResultsTimer;
+  bool _showSearchResults = false;
 
   @override
   void initState() {
@@ -68,6 +72,7 @@ class _MapPageViewState extends State<MapPageView> {
 
   @override
   void dispose() {
+    _hideSearchResultsTimer?.cancel();
     _searchController
       ..removeListener(_onSearchQueryChanged)
       ..dispose();
@@ -138,13 +143,17 @@ class _MapPageViewState extends State<MapPageView> {
                           normalizeMapRoomSearchQuery(
                             _searchController.text,
                           ).isNotEmpty,
-                      showResults: _searchFocusNode.hasFocus,
+                      showResults: _showSearchResults,
                       onEntrySelected: (MapRoomSearchEntry entry) {
+                        _hideSearchResultsTimer?.cancel();
                         _searchController.text = entry.name;
                         _searchController.selection = TextSelection.collapsed(
                           offset: entry.name.length,
                         );
-                        _searchFocusNode.unfocus();
+                        setState(() {
+                          _showSearchResults = false;
+                        });
+                        FocusScope.of(context).unfocus();
                         context.read<MapBloc>().add(
                           RoomSearchResultSelected(entry),
                         );
@@ -255,8 +264,38 @@ class _MapPageViewState extends State<MapPageView> {
 
   void _onSearchQueryChanged() {
     if (mounted) {
-      setState(() {});
+      final bool hasQuery =
+          normalizeMapRoomSearchQuery(_searchController.text).isNotEmpty;
+      if (_searchFocusNode.hasFocus) {
+        _hideSearchResultsTimer?.cancel();
+      }
+      setState(() {
+        if (_searchFocusNode.hasFocus) {
+          _showSearchResults = hasQuery;
+          return;
+        }
+
+        if (!hasQuery) {
+          _showSearchResults = false;
+        }
+      });
+      if (!_searchFocusNode.hasFocus) {
+        _scheduleSearchResultsHide();
+      }
     }
+  }
+
+  void _scheduleSearchResultsHide() {
+    _hideSearchResultsTimer?.cancel();
+    _hideSearchResultsTimer = Timer(const Duration(milliseconds: 180), () {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _showSearchResults = false;
+      });
+    });
   }
 
   String _selectedRoomName(MapLoaded state) {

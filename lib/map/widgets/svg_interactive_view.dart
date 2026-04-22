@@ -29,6 +29,7 @@ class _SvgInteractiveMapState extends State<SvgInteractiveMap>
   final TransformationController _transformationController =
       TransformationController();
   late final AnimationController _zoomAnimationController;
+  late final AnimationController _selectionPulseController;
 
   Animation<Matrix4>? _zoomAnimation;
   bool _isInitialScaleSet = false;
@@ -51,11 +52,16 @@ class _SvgInteractiveMapState extends State<SvgInteractiveMap>
         _transformationController.value = zoomAnimation.value;
       }
     });
+    _selectionPulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
   }
 
   @override
   void dispose() {
     _zoomAnimationController.dispose();
+    _selectionPulseController.dispose();
     _transformationController.dispose();
 
     for (final _TapAnimation animation in _tapAnimations) {
@@ -160,6 +166,7 @@ class _SvgInteractiveMapState extends State<SvgInteractiveMap>
                         painter: _RoomsHighlightPainter(
                           rooms,
                           selectedRoomId: widget.selectedRoomId,
+                          selectionPulse: _selectionPulseController,
                         ),
                       ),
                     ),
@@ -357,6 +364,7 @@ class _SvgInteractiveMapState extends State<SvgInteractiveMap>
     );
     _zoomAnimationController.forward(from: 0);
     _lastFocusedRoomId = selectedRoomId;
+    _selectionPulseController.forward(from: 0);
   }
 
   Matrix4 _clampMatrix(Matrix4 matrix) {
@@ -405,21 +413,33 @@ class _SvgInteractiveMapState extends State<SvgInteractiveMap>
 }
 
 class _RoomsHighlightPainter extends CustomPainter {
-  _RoomsHighlightPainter(this.rooms, {required this.selectedRoomId});
+  _RoomsHighlightPainter(
+    this.rooms, {
+    required this.selectedRoomId,
+    required this.selectionPulse,
+  }) : super(repaint: selectionPulse);
 
   final List<RoomModel> rooms;
   final String? selectedRoomId;
+  final Animation<double> selectionPulse;
 
   @override
   void paint(Canvas canvas, Size size) {
+    final double pulse = math.sin(selectionPulse.value * math.pi * 4).abs();
     final Paint highlightPaint =
         Paint()
-          ..color = Colors.yellow.withOpacity(0.3)
+          ..color = Colors.yellow.withValues(alpha: 0.24 + pulse * 0.34)
           ..style = PaintingStyle.fill;
+    final Paint strokePaint =
+        Paint()
+          ..color = Colors.orangeAccent.withValues(alpha: 0.22 + pulse * 0.72)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 4;
 
     for (final RoomModel room in rooms) {
       if (room.roomId == selectedRoomId) {
         canvas.drawPath(room.path, highlightPaint);
+        canvas.drawPath(room.path, strokePaint);
       }
     }
   }
@@ -427,7 +447,8 @@ class _RoomsHighlightPainter extends CustomPainter {
   @override
   bool shouldRepaint(_RoomsHighlightPainter oldDelegate) {
     return oldDelegate.selectedRoomId != selectedRoomId ||
-        oldDelegate.rooms.length != rooms.length;
+        oldDelegate.rooms.length != rooms.length ||
+        oldDelegate.selectionPulse != selectionPulse;
   }
 }
 
