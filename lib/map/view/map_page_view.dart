@@ -35,6 +35,8 @@ Widget buildScheduleSearchSelectedRoomAction(
   );
 }
 
+enum _RouteSearchField { start, destination }
+
 class MapPageView extends StatefulWidget {
   const MapPageView({
     super.key,
@@ -54,14 +56,26 @@ class _MapPageViewState extends State<MapPageView> {
 
   late final TextEditingController _searchController = TextEditingController();
   late final FocusNode _searchFocusNode = FocusNode();
+  late final TextEditingController _routeStartController =
+      TextEditingController();
+  late final TextEditingController _routeDestinationController =
+      TextEditingController();
+  late final FocusNode _routeStartFocusNode = FocusNode();
+  late final FocusNode _routeDestinationFocusNode = FocusNode();
   Timer? _hideSearchResultsTimer;
+  Timer? _hideRouteResultsTimer;
   bool _showSearchResults = false;
+  _RouteSearchField? _activeRouteSearchField;
 
   @override
   void initState() {
     super.initState();
     _searchController.addListener(_onSearchQueryChanged);
     _searchFocusNode.addListener(_onSearchQueryChanged);
+    _routeStartController.addListener(_onRouteFieldChanged);
+    _routeDestinationController.addListener(_onRouteFieldChanged);
+    _routeStartFocusNode.addListener(_onRouteFieldChanged);
+    _routeDestinationFocusNode.addListener(_onRouteFieldChanged);
     SystemChrome.setPreferredOrientations(<DeviceOrientation>[
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,
@@ -73,11 +87,24 @@ class _MapPageViewState extends State<MapPageView> {
   @override
   void dispose() {
     _hideSearchResultsTimer?.cancel();
+    _hideRouteResultsTimer?.cancel();
     _searchController
       ..removeListener(_onSearchQueryChanged)
       ..dispose();
     _searchFocusNode
       ..removeListener(_onSearchQueryChanged)
+      ..dispose();
+    _routeStartController
+      ..removeListener(_onRouteFieldChanged)
+      ..dispose();
+    _routeDestinationController
+      ..removeListener(_onRouteFieldChanged)
+      ..dispose();
+    _routeStartFocusNode
+      ..removeListener(_onRouteFieldChanged)
+      ..dispose();
+    _routeDestinationFocusNode
+      ..removeListener(_onRouteFieldChanged)
       ..dispose();
     SystemChrome.setPreferredOrientations(<DeviceOrientation>[
       DeviceOrientation.portraitUp,
@@ -97,7 +124,12 @@ class _MapPageViewState extends State<MapPageView> {
           )..add(MapInitialized()),
       child: Scaffold(
         appBar: AppBar(title: const Text('Карта университета')),
-        body: BlocBuilder<MapBloc, MapState>(
+        body: BlocConsumer<MapBloc, MapState>(
+          listener: (BuildContext context, MapState state) {
+            if (state is MapLoaded) {
+              _syncRouteControllers(state.routeState);
+            }
+          },
           builder: (BuildContext context, MapState state) {
             if (state is MapError) {
               return Center(child: Text(state.message));
@@ -109,6 +141,7 @@ class _MapPageViewState extends State<MapPageView> {
 
             final bool isLandscape =
                 MediaQuery.of(context).orientation == Orientation.landscape;
+            final Set<String> routeFloorIds = _routeFloorIds(state);
             return Stack(
               children: <Widget>[
                 Column(
@@ -133,33 +166,62 @@ class _MapPageViewState extends State<MapPageView> {
                   right: MediaQuery.of(context).size.width < 560 ? 132 : null,
                   child: SizedBox(
                     width: MediaQuery.of(context).size.width < 560 ? null : 420,
-                    child: _MapRoomSearchPanel(
-                      controller: _searchController,
-                      focusNode: _searchFocusNode,
-                      entries: filterMapRoomSearchEntries(
-                        entries: state.searchEntries,
-                        query: _searchController.text,
-                        limit: _searchLimit,
-                      ),
-                      hasQuery:
-                          normalizeMapRoomSearchQuery(
-                            _searchController.text,
-                          ).isNotEmpty,
-                      showResults: _showSearchResults,
-                      onEntrySelected: (MapRoomSearchEntry entry) {
-                        _hideSearchResultsTimer?.cancel();
-                        _searchController.text = entry.name;
-                        _searchController.selection = TextSelection.collapsed(
-                          offset: entry.name.length,
-                        );
-                        setState(() {
-                          _showSearchResults = false;
-                        });
-                        FocusScope.of(context).unfocus();
-                        context.read<MapBloc>().add(
-                          RoomSearchResultSelected(entry),
-                        );
-                      },
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        _MapRoomSearchPanel(
+                          controller: _searchController,
+                          focusNode: _searchFocusNode,
+                          entries: filterMapRoomSearchEntries(
+                            entries: state.searchEntries,
+                            query: _searchController.text,
+                            limit: _searchLimit,
+                          ),
+                          hasQuery:
+                              normalizeMapRoomSearchQuery(
+                                _searchController.text,
+                              ).isNotEmpty,
+                          showResults: _showSearchResults,
+                          onEntrySelected: (MapRoomSearchEntry entry) {
+                            _hideSearchResultsTimer?.cancel();
+                            _searchController.text = entry.name;
+                            _searchController
+                                .selection = TextSelection.collapsed(
+                              offset: entry.name.length,
+                            );
+                            setState(() {
+                              _showSearchResults = false;
+                            });
+                            FocusScope.of(context).unfocus();
+                            context.read<MapBloc>().add(
+                              RoomSearchResultSelected(entry),
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                        _RoutePlannerPanel(
+                          startController: _routeStartController,
+                          destinationController: _routeDestinationController,
+                          startFocusNode: _routeStartFocusNode,
+                          destinationFocusNode: _routeDestinationFocusNode,
+                          activeField: _activeRouteSearchField,
+                          entries: _routeSearchEntries(state),
+                          routeState: state.routeState,
+                          onFieldFocused: _activateRouteSearchField,
+                          onEntrySelected: (MapRoomSearchEntry entry) {
+                            _selectRouteEntry(context: context, entry: entry);
+                          },
+                          onSubmitted: () {
+                            _submitActiveRouteField(
+                              context: context,
+                              entries: state.searchEntries,
+                            );
+                          },
+                          onClearRoute: () {
+                            context.read<MapBloc>().add(RouteCleared());
+                          },
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -201,6 +263,9 @@ class _MapPageViewState extends State<MapPageView> {
                                       isSelected:
                                           state.selectedFloor.number ==
                                           floor.number,
+                                      hasRouteSegment: routeFloorIds.contains(
+                                        floor.id,
+                                      ),
                                       onClick: () {
                                         context.read<MapBloc>().add(
                                           FloorSelected(
@@ -224,6 +289,9 @@ class _MapPageViewState extends State<MapPageView> {
                                       isSelected:
                                           state.selectedFloor.number ==
                                           floor.number,
+                                      hasRouteSegment: routeFloorIds.contains(
+                                        floor.id,
+                                      ),
                                       onClick: () {
                                         context.read<MapBloc>().add(
                                           FloorSelected(
@@ -315,6 +383,195 @@ class _MapPageViewState extends State<MapPageView> {
     });
   }
 
+  void _onRouteFieldChanged() {
+    if (!mounted) {
+      return;
+    }
+
+    final _RouteSearchField? focusedField = _focusedRouteField();
+    if (focusedField != null) {
+      _hideRouteResultsTimer?.cancel();
+      setState(() {
+        _activeRouteSearchField = focusedField;
+      });
+      return;
+    }
+
+    _scheduleRouteResultsHide();
+  }
+
+  void _scheduleRouteResultsHide() {
+    _hideRouteResultsTimer?.cancel();
+    _hideRouteResultsTimer = Timer(const Duration(milliseconds: 180), () {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _activeRouteSearchField = null;
+      });
+    });
+  }
+
+  _RouteSearchField? _focusedRouteField() {
+    if (_routeStartFocusNode.hasFocus) {
+      return _RouteSearchField.start;
+    }
+    if (_routeDestinationFocusNode.hasFocus) {
+      return _RouteSearchField.destination;
+    }
+
+    return null;
+  }
+
+  void _activateRouteSearchField(_RouteSearchField field) {
+    _hideRouteResultsTimer?.cancel();
+    setState(() {
+      _activeRouteSearchField = field;
+    });
+  }
+
+  void _selectRouteEntry({
+    required BuildContext context,
+    required MapRoomSearchEntry entry,
+  }) {
+    final _RouteSearchField? activeField = _activeRouteSearchField;
+    if (activeField == null) {
+      return;
+    }
+
+    _hideRouteResultsTimer?.cancel();
+    if (activeField == _RouteSearchField.start) {
+      _setControllerText(controller: _routeStartController, text: entry.name);
+      context.read<MapBloc>().add(RouteStartSelected(entry));
+      if (_routeDestinationController.text.trim().isEmpty) {
+        _routeDestinationFocusNode.requestFocus();
+        setState(() {
+          _activeRouteSearchField = _RouteSearchField.destination;
+        });
+        return;
+      }
+    } else {
+      _setControllerText(
+        controller: _routeDestinationController,
+        text: entry.name,
+      );
+      context.read<MapBloc>().add(RouteDestinationSelected(entry));
+    }
+
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _activeRouteSearchField = null;
+    });
+  }
+
+  void _submitActiveRouteField({
+    required BuildContext context,
+    required List<MapRoomSearchEntry> entries,
+  }) {
+    final _RouteSearchField? activeField = _activeRouteSearchField;
+    if (activeField == null) {
+      return;
+    }
+
+    final TextEditingController controller =
+        activeField == _RouteSearchField.start
+            ? _routeStartController
+            : _routeDestinationController;
+    final MapRoomSearchEntry? entry = _bestRouteSearchEntry(
+      entries: entries,
+      query: controller.text,
+    );
+    if (entry == null) {
+      return;
+    }
+
+    _selectRouteEntry(context: context, entry: entry);
+  }
+
+  MapRoomSearchEntry? _bestRouteSearchEntry({
+    required List<MapRoomSearchEntry> entries,
+    required String query,
+  }) {
+    final String normalizedQuery = normalizeMapRoomSearchQuery(query);
+    if (normalizedQuery.isEmpty) {
+      return null;
+    }
+
+    for (final MapRoomSearchEntry entry in entries) {
+      if (normalizeMapRoomSearchQuery(entry.name) == normalizedQuery) {
+        return entry;
+      }
+    }
+
+    final List<MapRoomSearchEntry> filteredEntries = filterMapRoomSearchEntries(
+      entries: entries,
+      query: query,
+      limit: 1,
+    );
+    if (filteredEntries.isEmpty) {
+      return null;
+    }
+
+    return filteredEntries.first;
+  }
+
+  List<MapRoomSearchEntry> _routeSearchEntries(MapLoaded state) {
+    final _RouteSearchField? activeField = _activeRouteSearchField;
+    if (activeField == null) {
+      return <MapRoomSearchEntry>[];
+    }
+
+    final String query =
+        activeField == _RouteSearchField.start
+            ? _routeStartController.text
+            : _routeDestinationController.text;
+    return filterMapRoomSearchEntries(
+      entries: state.searchEntries,
+      query: query,
+      limit: _searchLimit,
+    );
+  }
+
+  void _syncRouteControllers(MapRouteState routeState) {
+    _syncRouteController(
+      controller: _routeStartController,
+      focusNode: _routeStartFocusNode,
+      entry: routeState.start,
+    );
+    _syncRouteController(
+      controller: _routeDestinationController,
+      focusNode: _routeDestinationFocusNode,
+      entry: routeState.destination,
+    );
+  }
+
+  void _syncRouteController({
+    required TextEditingController controller,
+    required FocusNode focusNode,
+    required MapRoomSearchEntry? entry,
+  }) {
+    if (focusNode.hasFocus) {
+      return;
+    }
+
+    _setControllerText(controller: controller, text: entry?.name ?? '');
+  }
+
+  void _setControllerText({
+    required TextEditingController controller,
+    required String text,
+  }) {
+    if (controller.text == text) {
+      return;
+    }
+
+    controller.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+  }
+
   MapRoomSearchEntry? _selectedRoomEntry(MapLoaded state) {
     final String? selectedRoomId = state.selectedRoomId;
     if (selectedRoomId == null) {
@@ -330,7 +587,9 @@ class _MapPageViewState extends State<MapPageView> {
     }
 
     for (final RoomModel room in state.rooms) {
-      if (room.roomId == selectedRoomId) {
+      if (room.roomId == selectedRoomId &&
+          room.roomId.contains('__r__') &&
+          room.name.isNotEmpty) {
         return MapRoomSearchEntry(
           roomId: room.roomId,
           name: room.name,
@@ -371,6 +630,17 @@ class _MapPageViewState extends State<MapPageView> {
         )
         .toList(growable: false);
   }
+
+  Set<String> _routeFloorIds(MapLoaded state) {
+    final MapRouteResult? routeResult = state.routeState.result;
+    if (routeResult == null) {
+      return <String>{};
+    }
+
+    return routeResult.segments
+        .map((MapRouteSegment segment) => segment.floorId)
+        .toSet();
+  }
 }
 
 class _MapRoomSearchPanel extends StatelessWidget {
@@ -405,7 +675,7 @@ class _MapRoomSearchPanel extends StatelessWidget {
     return Material(
       color: colors.background02,
       elevation: 8,
-      shadowColor: Colors.black.withOpacity(0.14),
+      shadowColor: Colors.black.withValues(alpha: 0.14),
       borderRadius: BorderRadius.circular(12),
       clipBehavior: Clip.antiAlias,
       child: Column(
@@ -493,6 +763,253 @@ class _MapRoomSearchPanel extends StatelessWidget {
   }
 }
 
+class _RoutePlannerPanel extends StatelessWidget {
+  const _RoutePlannerPanel({
+    required this.startController,
+    required this.destinationController,
+    required this.startFocusNode,
+    required this.destinationFocusNode,
+    required this.activeField,
+    required this.entries,
+    required this.routeState,
+    required this.onFieldFocused,
+    required this.onEntrySelected,
+    required this.onSubmitted,
+    required this.onClearRoute,
+  });
+
+  final TextEditingController startController;
+  final TextEditingController destinationController;
+  final FocusNode startFocusNode;
+  final FocusNode destinationFocusNode;
+  final _RouteSearchField? activeField;
+  final List<MapRoomSearchEntry> entries;
+  final MapRouteState routeState;
+  final ValueChanged<_RouteSearchField> onFieldFocused;
+  final ValueChanged<MapRoomSearchEntry> onEntrySelected;
+  final VoidCallback onSubmitted;
+  final VoidCallback onClearRoute;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppColors colors = Theme.of(context).extension<AppColors>()!;
+    final _RouteSearchField? field = activeField;
+    final String activeQuery =
+        field == _RouteSearchField.start
+            ? startController.text
+            : field == _RouteSearchField.destination
+            ? destinationController.text
+            : '';
+    final bool showResults =
+        field != null && normalizeMapRoomSearchQuery(activeQuery).isNotEmpty;
+    final bool hasRouteState =
+        routeState.start != null ||
+        routeState.destination != null ||
+        routeState.result != null ||
+        routeState.errorMessage != null;
+
+    return Material(
+      color: colors.background02,
+      elevation: 8,
+      shadowColor: Colors.black.withValues(alpha: 0.14),
+      borderRadius: BorderRadius.circular(12),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    'Маршрут',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: colors.active,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                if (hasRouteState)
+                  IconButton(
+                    tooltip: 'Сбросить маршрут',
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.clear),
+                    onPressed: onClearRoute,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            _RouteSearchTextField(
+              controller: startController,
+              focusNode: startFocusNode,
+              field: _RouteSearchField.start,
+              icon: Icons.trip_origin,
+              labelText: 'Откуда',
+              textInputAction: TextInputAction.next,
+              onFocused: onFieldFocused,
+              onSubmitted: onSubmitted,
+            ),
+            const SizedBox(height: 8),
+            _RouteSearchTextField(
+              controller: destinationController,
+              focusNode: destinationFocusNode,
+              field: _RouteSearchField.destination,
+              icon: Icons.flag_outlined,
+              labelText: 'Куда',
+              textInputAction: TextInputAction.search,
+              onFocused: onFieldFocused,
+              onSubmitted: onSubmitted,
+            ),
+            if (showResults) const SizedBox(height: 8),
+            if (showResults)
+              _RouteSearchResults(
+                entries: entries,
+                onEntrySelected: onEntrySelected,
+              ),
+            if (hasRouteState) const SizedBox(height: 8),
+            if (hasRouteState) _RoutePlannerStatus(routeState: routeState),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RouteSearchTextField extends StatelessWidget {
+  const _RouteSearchTextField({
+    required this.controller,
+    required this.focusNode,
+    required this.field,
+    required this.icon,
+    required this.labelText,
+    required this.textInputAction,
+    required this.onFocused,
+    required this.onSubmitted,
+  });
+
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final _RouteSearchField field;
+  final IconData icon;
+  final String labelText;
+  final TextInputAction textInputAction;
+  final ValueChanged<_RouteSearchField> onFocused;
+  final VoidCallback onSubmitted;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      focusNode: focusNode,
+      textAlignVertical: TextAlignVertical.center,
+      textInputAction: textInputAction,
+      onTap: () => onFocused(field),
+      onSubmitted: (_) => onSubmitted(),
+      decoration: InputDecoration(
+        isDense: true,
+        labelText: labelText,
+        prefixIcon: Icon(icon),
+        border: const OutlineInputBorder(),
+      ),
+    );
+  }
+}
+
+class _RouteSearchResults extends StatelessWidget {
+  const _RouteSearchResults({
+    required this.entries,
+    required this.onEntrySelected,
+  });
+
+  final List<MapRoomSearchEntry> entries;
+  final ValueChanged<MapRoomSearchEntry> onEntrySelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppColors colors = Theme.of(context).extension<AppColors>()!;
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: colors.background01,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 220),
+        child:
+            entries.isEmpty
+                ? Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Аудитория не найдена',
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodyMedium?.copyWith(color: colors.deactive),
+                    ),
+                  ),
+                )
+                : ListView.builder(
+                  shrinkWrap: true,
+                  padding: EdgeInsets.zero,
+                  itemCount: entries.length,
+                  itemBuilder: (BuildContext context, int index) {
+                    final MapRoomSearchEntry entry = entries[index];
+                    return ListTile(
+                      dense: true,
+                      title: Text(
+                        entry.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        '${entry.campus.displayName}, ${_formatFloor(entry.floor.number)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      onTap: () => onEntrySelected(entry),
+                    );
+                  },
+                ),
+      ),
+    );
+  }
+}
+
+class _RoutePlannerStatus extends StatelessWidget {
+  const _RoutePlannerStatus({required this.routeState});
+
+  final MapRouteState routeState;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppColors colors = Theme.of(context).extension<AppColors>()!;
+    final TextStyle? baseStyle = Theme.of(context).textTheme.bodySmall;
+    final String statusText = _routeStatusText(routeState);
+    final String? floorsText = _routeFloorsText(routeState.result);
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(
+          statusText,
+          style: baseStyle?.copyWith(
+            color:
+                routeState.errorMessage == null
+                    ? colors.deactive
+                    : Theme.of(context).colorScheme.error,
+          ),
+        ),
+        if (floorsText != null)
+          Text(floorsText, style: baseStyle?.copyWith(color: colors.deactive)),
+      ],
+    );
+  }
+}
+
 class _SelectedRoomPanel extends StatelessWidget {
   const _SelectedRoomPanel({
     required this.roomName,
@@ -518,11 +1035,12 @@ class _SelectedRoomPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final AppColors colors = Theme.of(context).extension<AppColors>()!;
     final MapRoomSearchEntry? routeEntry = selectedRoomEntry;
+    final String titlePrefix = routeEntry == null ? 'Объект' : 'Аудитория';
 
     return Material(
       color: colors.background02,
       elevation: 8,
-      shadowColor: Colors.black.withOpacity(0.14),
+      shadowColor: Colors.black.withValues(alpha: 0.14),
       borderRadius: BorderRadius.circular(12),
       clipBehavior: Clip.antiAlias,
       child: Padding(
@@ -535,7 +1053,7 @@ class _SelectedRoomPanel extends StatelessWidget {
               children: <Widget>[
                 Expanded(
                   child: Text(
-                    roomName.isEmpty ? 'Аудитория' : 'Аудитория $roomName',
+                    roomName.isEmpty ? titlePrefix : '$titlePrefix $roomName',
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodyLarge?.copyWith(
@@ -604,6 +1122,7 @@ class _RouteStatus extends StatelessWidget {
             ? 'не выбрано'
             : _routeEntryTitle(routeState.destination!);
     final String statusText = _routeStatusText(routeState);
+    final String? floorsText = _routeFloorsText(routeState.result);
 
     return Padding(
       padding: const EdgeInsets.only(top: 8),
@@ -659,6 +1178,11 @@ class _RouteStatus extends StatelessWidget {
                           : Theme.of(context).colorScheme.error,
                 ),
               ),
+              if (floorsText != null)
+                Text(
+                  floorsText,
+                  style: baseStyle?.copyWith(color: colors.deactive),
+                ),
             ],
           ),
         ),
@@ -685,6 +1209,23 @@ String _routeStatusText(MapRouteState routeState) {
   }
 
   return 'Маршрут не построен';
+}
+
+String? _routeFloorsText(MapRouteResult? routeResult) {
+  if (routeResult == null || routeResult.segments.isEmpty) {
+    return null;
+  }
+
+  final List<int> floorNumbers = <int>[];
+  for (final MapRouteSegment segment in routeResult.segments) {
+    if (floorNumbers.isNotEmpty && floorNumbers.last == segment.floorNumber) {
+      continue;
+    }
+
+    floorNumbers.add(segment.floorNumber);
+  }
+
+  return 'Этажи маршрута: ${floorNumbers.join(' → ')}';
 }
 
 String _routeEntryTitle(MapRoomSearchEntry entry) {

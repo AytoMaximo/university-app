@@ -78,11 +78,6 @@ class _SvgInteractiveMapState extends State<SvgInteractiveMap>
   void didUpdateWidget(covariant SvgInteractiveMap oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    if (oldWidget.svgAssetPath != widget.svgAssetPath) {
-      _isInitialScaleSet = false;
-      _lastFocusedRoomId = null;
-    }
-
     if (oldWidget.selectedRoomId != widget.selectedRoomId) {
       _lastFocusedRoomId = null;
     }
@@ -455,7 +450,13 @@ class _RoutePainter extends CustomPainter {
           ..strokeWidth = 4;
 
     for (final MapRouteSegment segment in segments) {
-      if (segment.points.length < 2) {
+      if (segment.points.isEmpty) {
+        continue;
+      }
+      if (segment.points.length == 1) {
+        canvas
+          ..drawCircle(segment.points.first, 16, pointPaint)
+          ..drawCircle(segment.points.first, 16, pointBorderPaint);
         continue;
       }
 

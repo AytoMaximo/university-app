@@ -62,7 +62,7 @@ class MapRoutingService {
     return MapRouteResult(
       start: start,
       destination: destination,
-      segments: _buildSegments(graph: graph, path: path),
+      segments: _buildSegments(graph: graph, path: path, floors: floors),
     );
   }
 
@@ -521,8 +521,14 @@ class MapRoutingService {
   List<MapRouteSegment> _buildSegments({
     required _RouteGraph graph,
     required List<int> path,
+    required List<_RouteFloorData> floors,
   }) {
     final List<MapRouteSegment> segments = <MapRouteSegment>[];
+    final Map<String, _RouteFloorData> floorDataById =
+        <String, _RouteFloorData>{
+          for (final _RouteFloorData floorData in floors)
+            floorData.floor.id: floorData,
+        };
     String? currentFloorId;
     int? currentFloorNumber;
     List<Offset> currentPoints = <Offset>[];
@@ -535,6 +541,8 @@ class MapRoutingService {
           floorId: currentFloorId,
           floorNumber: currentFloorNumber,
           points: currentPoints,
+          floorData:
+              currentFloorId == null ? null : floorDataById[currentFloorId],
         );
         currentFloorId = node.floorId;
         currentFloorNumber = node.floorNumber;
@@ -552,6 +560,7 @@ class MapRoutingService {
       floorId: currentFloorId,
       floorNumber: currentFloorNumber,
       points: currentPoints,
+      floorData: currentFloorId == null ? null : floorDataById[currentFloorId],
     );
 
     return segments;
@@ -562,18 +571,97 @@ class MapRoutingService {
     required String? floorId,
     required int? floorNumber,
     required List<Offset> points,
+    required _RouteFloorData? floorData,
   }) {
-    if (floorId == null || floorNumber == null || points.length < 2) {
+    if (floorId == null || floorNumber == null || points.isEmpty) {
       return;
     }
+
+    final List<Offset> segmentPoints =
+        floorData == null
+            ? _simplifyPoints(points)
+            : _smoothPoints(points: points, floorData: floorData);
 
     segments.add(
       MapRouteSegment(
         floorId: floorId,
         floorNumber: floorNumber,
-        points: _simplifyPoints(points),
+        points: segmentPoints,
       ),
     );
+  }
+
+  List<Offset> _smoothPoints({
+    required List<Offset> points,
+    required _RouteFloorData floorData,
+  }) {
+    if (points.length < 3) {
+      return _simplifyPoints(points);
+    }
+
+    final List<Offset> smoothed = <Offset>[points.first];
+    int anchorIndex = 0;
+    while (anchorIndex < points.length - 1) {
+      int nextIndex = points.length - 1;
+      while (nextIndex > anchorIndex + 1 &&
+          !_lineIsWalkable(
+            start: points[anchorIndex],
+            end: points[nextIndex],
+            walkableKeys: floorData.walkableKeys,
+          )) {
+        nextIndex -= 1;
+      }
+
+      smoothed.add(points[nextIndex]);
+      anchorIndex = nextIndex;
+    }
+
+    return _simplifyPoints(smoothed);
+  }
+
+  bool _lineIsWalkable({
+    required Offset start,
+    required Offset end,
+    required Set<_GridKey> walkableKeys,
+  }) {
+    final double distance = (end - start).distance;
+    if (distance <= _gridStep) {
+      return true;
+    }
+
+    final int steps = math.max(2, (distance / (_gridStep / 2)).ceil());
+    for (int index = 1; index < steps; index += 1) {
+      final double ratio = index / steps;
+      final Offset point = Offset.lerp(start, end, ratio)!;
+      if (!_pointIsWalkable(point: point, walkableKeys: walkableKeys)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  bool _pointIsWalkable({
+    required Offset point,
+    required Set<_GridKey> walkableKeys,
+  }) {
+    final int centerX = (point.dx / _gridStep).round();
+    final int centerY = (point.dy / _gridStep).round();
+    for (int dx = -1; dx <= 1; dx += 1) {
+      for (int dy = -1; dy <= 1; dy += 1) {
+        final _GridKey key = _GridKey(x: centerX + dx, y: centerY + dy);
+        if (!walkableKeys.contains(key)) {
+          continue;
+        }
+
+        final Offset gridPoint = _pointFromKey(key);
+        if ((gridPoint - point).distance <= _gridStep * 0.75) {
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 
   List<Offset> _simplifyPoints(List<Offset> points) {

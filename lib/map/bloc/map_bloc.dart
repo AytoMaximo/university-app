@@ -41,7 +41,7 @@ class MapBloc extends Bloc<MapEvent, MapState> {
       await objectsService.loadObjects();
       _searchEntries = await _buildSearchEntries();
       final CampusModel campus = availableCampuses.first;
-      final FloorModel floor = campus.floors.first;
+      final FloorModel floor = _defaultFloorForCampus(campus);
       final (List<RoomModel>, Rect) floorData = await _parseFloor(floor);
       emit(
         MapLoaded(
@@ -64,7 +64,7 @@ class MapBloc extends Bloc<MapEvent, MapState> {
   ) async {
     emit(const MapLoading());
     try {
-      final FloorModel floor = event.selectedCampus.floors.first;
+      final FloorModel floor = _defaultFloorForCampus(event.selectedCampus);
       final (List<RoomModel>, Rect) floorData = await _parseFloor(floor);
       emit(
         MapLoaded(
@@ -89,7 +89,6 @@ class MapBloc extends Bloc<MapEvent, MapState> {
         state is MapLoaded
             ? (state as MapLoaded).routeState
             : const MapRouteState.empty();
-    emit(const MapLoading());
     try {
       final (List<RoomModel>, Rect) floorData = await _parseFloor(
         event.selectedFloor,
@@ -143,7 +142,6 @@ class MapBloc extends Bloc<MapEvent, MapState> {
         state is MapLoaded
             ? (state as MapLoaded).routeState
             : const MapRouteState.empty();
-    emit(const MapLoading());
     try {
       final (List<RoomModel>, Rect) floorData = await _parseFloor(
         event.searchEntry.floor,
@@ -278,8 +276,7 @@ class MapBloc extends Bloc<MapEvent, MapState> {
     );
     final List<RoomModel> rooms = parsedSvg.$1
         .map((RoomModel room) {
-          final List<String> idParts = room.roomId.split('__r__');
-          final String id = idParts.length > 1 ? idParts[1] : '';
+          final String id = _objectIdFromDataObject(room.roomId);
           final String name =
               room.name.isNotEmpty
                   ? room.name
@@ -305,7 +302,8 @@ class MapBloc extends Bloc<MapEvent, MapState> {
       for (final FloorModel floor in campus.floors) {
         final (List<RoomModel>, Rect) floorData = await _parseFloor(floor);
         for (final RoomModel room in floorData.$1) {
-          if (room.name.isEmpty) {
+          if (room.name.isEmpty ||
+              !objectsService.isRoom(_objectIdFromDataObject(room.roomId))) {
             continue;
           }
 
@@ -351,5 +349,26 @@ class MapBloc extends Bloc<MapEvent, MapState> {
           ),
         )
         .toList(growable: false);
+  }
+
+  FloorModel _defaultFloorForCampus(CampusModel campus) {
+    for (final FloorModel floor in campus.floors) {
+      if (floor.number == 2) {
+        return floor;
+      }
+    }
+
+    return campus.floors.first;
+  }
+
+  String _objectIdFromDataObject(String dataObject) {
+    final RegExpMatch? match = RegExp(
+      r'__(?:r|c|s|t)__([^_]+)$',
+    ).firstMatch(dataObject);
+    if (match == null) {
+      return '';
+    }
+
+    return match.group(1)!;
   }
 }
