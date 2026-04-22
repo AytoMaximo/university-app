@@ -393,6 +393,14 @@ class _MapRoomSearchPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final AppColors colors = Theme.of(context).extension<AppColors>()!;
+    final TextStyle searchTextStyle =
+        (Theme.of(context).textTheme.titleMedium ?? const TextStyle()).copyWith(
+          color: colors.active,
+          height: 1,
+        );
+    final TextStyle searchHintStyle = searchTextStyle.copyWith(
+      color: colors.deactive,
+    );
 
     return Material(
       color: colors.background02,
@@ -403,25 +411,40 @@ class _MapRoomSearchPanel extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          TextField(
-            controller: controller,
-            focusNode: focusNode,
-            textAlignVertical: TextAlignVertical.center,
-            textInputAction: TextInputAction.search,
-            decoration: InputDecoration(
-              hintText: 'Найти аудиторию',
-              prefixIcon: const Icon(Icons.search),
-              suffixIcon:
-                  hasQuery
-                      ? IconButton(
-                        tooltip: 'Очистить',
-                        icon: const Icon(Icons.close),
-                        onPressed: controller.clear,
-                      )
-                      : null,
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
+          SizedBox(
+            height: 48,
+            child: TextField(
+              controller: controller,
+              focusNode: focusNode,
+              style: searchTextStyle,
+              textAlignVertical: TextAlignVertical.center,
+              textInputAction: TextInputAction.search,
+              decoration: InputDecoration(
+                isCollapsed: true,
+                contentPadding: EdgeInsets.zero,
+                hintText: 'Найти аудиторию',
+                hintStyle: searchHintStyle,
+                prefixIcon: const Icon(Icons.search),
+                prefixIconConstraints: const BoxConstraints.tightFor(
+                  width: 48,
+                  height: 48,
+                ),
+                suffixIcon:
+                    hasQuery
+                        ? IconButton(
+                          tooltip: 'Очистить',
+                          icon: const Icon(Icons.close),
+                          onPressed: controller.clear,
+                        )
+                        : null,
+                suffixIconConstraints: const BoxConstraints.tightFor(
+                  width: 48,
+                  height: 48,
+                ),
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+              ),
             ),
           ),
           if (hasQuery && showResults) const Divider(height: 1),
