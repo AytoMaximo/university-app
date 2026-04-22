@@ -45,5 +45,11 @@ void main() {
     expect(floorNumbers.first, 2);
     expect(floorNumbers, contains(3));
     expect(floorNumbers.last, 4);
+
+    final MapRouteSegment floor3Segment = route.segments.firstWhere(
+      (MapRouteSegment segment) => segment.floorNumber == 3,
+    );
+
+    expect(floor3Segment.points.length, greaterThan(1));
   });
 }

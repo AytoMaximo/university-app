@@ -146,7 +146,10 @@ class MapRoutingService {
         continue;
       }
 
-      final _RouteObject routeObject = _RouteObject(bounds: path.getBounds());
+      final _RouteObject routeObject = _RouteObject(
+        dataObject: dataObject,
+        bounds: path.getBounds(),
+      );
       if (type == _RouteObjectType.room) {
         rooms[dataObject] = routeObject;
       } else if (type == _RouteObjectType.stairs) {
@@ -350,7 +353,11 @@ class MapRoutingService {
                   .distance,
         );
         stairNodes.add(
-          _StairNode(nodeIndex: nodeIndex, center: stair.bounds.center),
+          _StairNode(
+            nodeIndex: nodeIndex,
+            center: stair.bounds.center,
+            familyId: _stairFamilyId(stair.dataObject),
+          ),
         );
       }
       stairNodesByFloor[floorData.floor.id] = stairNodes;
@@ -366,12 +373,19 @@ class MapRoutingService {
       for (final _StairNode lower in lowerStairs) {
         for (final _StairNode upper in upperStairs) {
           final double distance = (lower.center - upper.center).distance;
-          if (distance > _stairMatchingTolerance ||
-              !_isNearestStairMatch(
+          if (!_canConnectStairsByCoordinates(
                 lower: lower,
                 upper: upper,
                 lowerStairs: lowerStairs,
                 upperStairs: upperStairs,
+                distance: distance,
+              ) &&
+              !_canConnectStairsByFamily(
+                lower: lower,
+                upper: upper,
+                lowerStairs: lowerStairs,
+                upperStairs: upperStairs,
+                distance: distance,
               )) {
             continue;
           }
@@ -384,6 +398,51 @@ class MapRoutingService {
         }
       }
     }
+  }
+
+  bool _canConnectStairsByCoordinates({
+    required _StairNode lower,
+    required _StairNode upper,
+    required List<_StairNode> lowerStairs,
+    required List<_StairNode> upperStairs,
+    required double distance,
+  }) {
+    if (distance > _stairCoordinateMatchingTolerance) {
+      return false;
+    }
+
+    return _isNearestStairMatch(
+      lower: lower,
+      upper: upper,
+      lowerStairs: lowerStairs,
+      upperStairs: upperStairs,
+    );
+  }
+
+  bool _canConnectStairsByFamily({
+    required _StairNode lower,
+    required _StairNode upper,
+    required List<_StairNode> lowerStairs,
+    required List<_StairNode> upperStairs,
+    required double distance,
+  }) {
+    if (lower.familyId != upper.familyId ||
+        distance > _stairFamilyMatchingTolerance) {
+      return false;
+    }
+
+    return _isNearestStairMatch(
+      lower: lower,
+      upper: upper,
+      lowerStairs: _stairsByFamily(
+        stairs: lowerStairs,
+        familyId: lower.familyId,
+      ),
+      upperStairs: _stairsByFamily(
+        stairs: upperStairs,
+        familyId: upper.familyId,
+      ),
+    );
   }
 
   bool _isNearestStairMatch({
@@ -423,6 +482,30 @@ class MapRoutingService {
     }
 
     return nearestStair;
+  }
+
+  List<_StairNode> _stairsByFamily({
+    required List<_StairNode> stairs,
+    required String familyId,
+  }) {
+    return stairs
+        .where((_StairNode stair) => stair.familyId == familyId)
+        .toList(growable: false);
+  }
+
+  String _stairFamilyId(String dataObject) {
+    final int stairMarkerIndex = dataObject.indexOf('__s__');
+    if (stairMarkerIndex < 0) {
+      return dataObject;
+    }
+
+    final String objectId = dataObject.substring(stairMarkerIndex + 5);
+    final int familyDelimiterIndex = objectId.indexOf(':');
+    if (familyDelimiterIndex < 0) {
+      return objectId;
+    }
+
+    return objectId.substring(0, familyDelimiterIndex);
   }
 
   int _findNearestGridNode({
@@ -737,7 +820,8 @@ class MapRoutingService {
   }
 
   static const double _gridStep = 24;
-  static const double _stairMatchingTolerance = 240;
+  static const double _stairCoordinateMatchingTolerance = 80;
+  static const double _stairFamilyMatchingTolerance = 280;
   static const double _roomConnectionMaxDistance = 360;
   static const double _stairConnectionMaxDistance = 240;
   static const double _floorTransferWeight = 420;
@@ -763,8 +847,9 @@ class _WalkableArea {
 }
 
 class _RouteObject {
-  const _RouteObject({required this.bounds});
+  const _RouteObject({required this.dataObject, required this.bounds});
 
+  final String dataObject;
   final Rect bounds;
 }
 
@@ -853,10 +938,15 @@ class _RouteGraph {
 }
 
 class _StairNode {
-  const _StairNode({required this.nodeIndex, required this.center});
+  const _StairNode({
+    required this.nodeIndex,
+    required this.center,
+    required this.familyId,
+  });
 
   final int nodeIndex;
   final Offset center;
+  final String familyId;
 }
 
 class _QueueEntry {
