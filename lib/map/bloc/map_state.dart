@@ -33,12 +33,14 @@ class MapLoaded extends MapState {
   final List<MapRoomSearchEntry> searchEntries;
   final Rect? boundingRect;
   final String? selectedRoomId;
+  final MapRouteState routeState;
 
   const MapLoaded({
     required this.selectedCampus,
     required this.selectedFloor,
     required this.rooms,
     required this.searchEntries,
+    required this.routeState,
     this.boundingRect,
     this.selectedRoomId,
   });
@@ -48,6 +50,7 @@ class MapLoaded extends MapState {
     FloorModel? selectedFloor,
     List<RoomModel>? rooms,
     List<MapRoomSearchEntry>? searchEntries,
+    MapRouteState? routeState,
     Rect? boundingRect,
     String? selectedRoomId,
   }) {
@@ -56,6 +59,7 @@ class MapLoaded extends MapState {
       selectedFloor: selectedFloor ?? this.selectedFloor,
       rooms: rooms ?? this.rooms,
       searchEntries: searchEntries ?? this.searchEntries,
+      routeState: routeState ?? this.routeState,
       boundingRect: boundingRect ?? this.boundingRect,
       selectedRoomId: selectedRoomId ?? this.selectedRoomId,
     );
@@ -67,6 +71,7 @@ class MapLoaded extends MapState {
       selectedFloor: selectedFloor,
       rooms: _roomsWithoutSelection(rooms),
       searchEntries: searchEntries,
+      routeState: routeState,
       boundingRect: boundingRect,
     );
   }
@@ -83,6 +88,7 @@ class MapLoaded extends MapState {
     selectedFloor,
     rooms,
     searchEntries,
+    routeState,
     boundingRect,
     selectedRoomId,
   ];

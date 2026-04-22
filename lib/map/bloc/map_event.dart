@@ -26,7 +26,7 @@ class FloorSelected extends MapEvent {
   const FloorSelected(this.selectedFloor, this.selectedCampus);
 
   @override
-  List<Object?> get props => [selectedFloor];
+  List<Object?> get props => [selectedFloor, selectedCampus];
 }
 
 class RoomSelected extends MapEvent {
@@ -48,3 +48,23 @@ class RoomSearchResultSelected extends MapEvent {
   @override
   List<Object?> get props => <Object?>[searchEntry];
 }
+
+class RouteStartSelected extends MapEvent {
+  const RouteStartSelected(this.searchEntry);
+
+  final MapRoomSearchEntry searchEntry;
+
+  @override
+  List<Object?> get props => <Object?>[searchEntry];
+}
+
+class RouteDestinationSelected extends MapEvent {
+  const RouteDestinationSelected(this.searchEntry);
+
+  final MapRoomSearchEntry searchEntry;
+
+  @override
+  List<Object?> get props => <Object?>[searchEntry];
+}
+
+class RouteCleared extends MapEvent {}

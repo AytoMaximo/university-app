@@ -4,18 +4,25 @@ import 'package:bloc/bloc.dart';
 import 'package:rtu_mirea_app/map/map.dart';
 
 class MapBloc extends Bloc<MapEvent, MapState> {
-  MapBloc({required this.availableCampuses, required this.objectsService})
-    : super(const MapInitial()) {
+  MapBloc({
+    required this.availableCampuses,
+    required this.objectsService,
+    required this.routingService,
+  }) : super(const MapInitial()) {
     on<MapInitialized>(_onMapInitialized);
     on<CampusSelected>(_onCampusSelected);
     on<FloorSelected>(_onFloorSelected);
     on<RoomSelected>(_onRoomSelected);
     on<RoomSelectionCleared>(_onRoomSelectionCleared);
     on<RoomSearchResultSelected>(_onRoomSearchResultSelected);
+    on<RouteStartSelected>(_onRouteStartSelected);
+    on<RouteDestinationSelected>(_onRouteDestinationSelected);
+    on<RouteCleared>(_onRouteCleared);
   }
 
   final List<CampusModel> availableCampuses;
   final ObjectsService objectsService;
+  final MapRoutingService routingService;
   final Map<String, (List<RoomModel>, Rect)> _floorRoomsCache =
       <String, (List<RoomModel>, Rect)>{};
   List<MapRoomSearchEntry> _searchEntries = <MapRoomSearchEntry>[];
@@ -42,6 +49,7 @@ class MapBloc extends Bloc<MapEvent, MapState> {
           selectedFloor: floor,
           rooms: _roomsWithSelection(floorData.$1, null),
           searchEntries: _searchEntries,
+          routeState: const MapRouteState.empty(),
           boundingRect: floorData.$2,
         ),
       );
@@ -64,6 +72,7 @@ class MapBloc extends Bloc<MapEvent, MapState> {
           selectedFloor: floor,
           rooms: _roomsWithSelection(floorData.$1, null),
           searchEntries: _searchEntries,
+          routeState: const MapRouteState.empty(),
           boundingRect: floorData.$2,
         ),
       );
@@ -76,6 +85,10 @@ class MapBloc extends Bloc<MapEvent, MapState> {
     FloorSelected event,
     Emitter<MapState> emit,
   ) async {
+    final MapRouteState routeState =
+        state is MapLoaded
+            ? (state as MapLoaded).routeState
+            : const MapRouteState.empty();
     emit(const MapLoading());
     try {
       final (List<RoomModel>, Rect) floorData = await _parseFloor(
@@ -87,6 +100,7 @@ class MapBloc extends Bloc<MapEvent, MapState> {
           selectedFloor: event.selectedFloor,
           rooms: _roomsWithSelection(floorData.$1, null),
           searchEntries: _searchEntries,
+          routeState: routeState,
           boundingRect: floorData.$2,
         ),
       );
@@ -125,6 +139,10 @@ class MapBloc extends Bloc<MapEvent, MapState> {
     RoomSearchResultSelected event,
     Emitter<MapState> emit,
   ) async {
+    final MapRouteState routeState =
+        state is MapLoaded
+            ? (state as MapLoaded).routeState
+            : const MapRouteState.empty();
     emit(const MapLoading());
     try {
       final (List<RoomModel>, Rect) floorData = await _parseFloor(
@@ -136,12 +154,116 @@ class MapBloc extends Bloc<MapEvent, MapState> {
           selectedFloor: event.searchEntry.floor,
           rooms: _roomsWithSelection(floorData.$1, event.searchEntry.roomId),
           searchEntries: _searchEntries,
+          routeState: routeState,
           boundingRect: floorData.$2,
           selectedRoomId: event.searchEntry.roomId,
         ),
       );
     } catch (error) {
       emit(MapError('Ошибка поиска аудитории: $error'));
+    }
+  }
+
+  Future<void> _onRouteStartSelected(
+    RouteStartSelected event,
+    Emitter<MapState> emit,
+  ) async {
+    if (state is! MapLoaded) {
+      return;
+    }
+
+    final MapLoaded currentState = state as MapLoaded;
+    await _emitRouteState(
+      routeState: currentState.routeState.withStart(event.searchEntry),
+      emit: emit,
+    );
+  }
+
+  Future<void> _onRouteDestinationSelected(
+    RouteDestinationSelected event,
+    Emitter<MapState> emit,
+  ) async {
+    if (state is! MapLoaded) {
+      return;
+    }
+
+    final MapLoaded currentState = state as MapLoaded;
+    await _emitRouteState(
+      routeState: currentState.routeState.withDestination(event.searchEntry),
+      emit: emit,
+    );
+  }
+
+  void _onRouteCleared(RouteCleared event, Emitter<MapState> emit) {
+    if (state is! MapLoaded) {
+      return;
+    }
+
+    final MapLoaded currentState = state as MapLoaded;
+    emit(currentState.copyWith(routeState: const MapRouteState.empty()));
+  }
+
+  Future<void> _emitRouteState({
+    required MapRouteState routeState,
+    required Emitter<MapState> emit,
+  }) async {
+    if (state is! MapLoaded) {
+      return;
+    }
+
+    final MapLoaded currentState = state as MapLoaded;
+    emit(currentState.copyWith(routeState: routeState));
+    if (!routeState.canBuild) {
+      return;
+    }
+
+    final MapRoomSearchEntry start = routeState.start!;
+    final MapRoomSearchEntry destination = routeState.destination!;
+    if (start.roomId == destination.roomId &&
+        start.floor.id == destination.floor.id) {
+      final MapLoaded loadedState =
+          state is MapLoaded ? state as MapLoaded : currentState;
+      emit(
+        loadedState.copyWith(
+          routeState: routeState.withError('Выберите разные аудитории.'),
+        ),
+      );
+      return;
+    }
+
+    final MapRouteState buildingState = routeState.asBuilding();
+    final MapLoaded loadedBeforeBuild =
+        state is MapLoaded ? state as MapLoaded : currentState;
+    emit(loadedBeforeBuild.copyWith(routeState: buildingState));
+    try {
+      final MapRouteResult routeResult = await routingService.buildRoute(
+        start: start,
+        destination: destination,
+        availableCampuses: availableCampuses,
+      );
+      if (state is! MapLoaded) {
+        return;
+      }
+
+      final MapLoaded loadedAfterBuild = state as MapLoaded;
+      emit(
+        loadedAfterBuild.copyWith(
+          routeState: routeState.withResult(routeResult),
+        ),
+      );
+    } catch (error) {
+      if (state is! MapLoaded) {
+        return;
+      }
+
+      final MapLoaded loadedAfterError = state as MapLoaded;
+      emit(
+        loadedAfterError.copyWith(
+          routeState: routeState.withError(
+            'Не удалось построить маршрут: $error',
+          ),
+        ),
+      );
     }
   }
 

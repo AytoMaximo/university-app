@@ -93,6 +93,7 @@ class _MapPageViewState extends State<MapPageView> {
           (_) => MapBloc(
             availableCampuses: universityMapCampuses,
             objectsService: ObjectsService(),
+            routingService: MapRoutingService(),
           )..add(MapInitialized()),
       child: Scaffold(
         appBar: AppBar(title: const Text('Карта университета')),
@@ -116,6 +117,7 @@ class _MapPageViewState extends State<MapPageView> {
                       child: SvgInteractiveMap(
                         svgAssetPath: state.selectedFloor.svgPath,
                         selectedRoomId: state.selectedRoomId,
+                        routeSegments: _currentFloorRouteSegments(state),
                         onRoomSelected: (RoomModel room) {
                           context.read<MapBloc>().add(
                             RoomSelected(room.roomId),
@@ -246,8 +248,23 @@ class _MapPageViewState extends State<MapPageView> {
                           MediaQuery.of(context).size.width < 560 ? null : 360,
                       child: _SelectedRoomPanel(
                         roomName: _selectedRoomName(state),
+                        selectedRoomEntry: _selectedRoomEntry(state),
+                        routeState: state.routeState,
                         selectedRoomActionBuilder:
                             widget.selectedRoomActionBuilder,
+                        onSelectRouteStart: (MapRoomSearchEntry entry) {
+                          context.read<MapBloc>().add(
+                            RouteStartSelected(entry),
+                          );
+                        },
+                        onSelectRouteDestination: (MapRoomSearchEntry entry) {
+                          context.read<MapBloc>().add(
+                            RouteDestinationSelected(entry),
+                          );
+                        },
+                        onClearRoute: () {
+                          context.read<MapBloc>().add(RouteCleared());
+                        },
                         onClose: () {
                           context.read<MapBloc>().add(RoomSelectionCleared());
                         },
@@ -298,13 +315,38 @@ class _MapPageViewState extends State<MapPageView> {
     });
   }
 
-  String _selectedRoomName(MapLoaded state) {
+  MapRoomSearchEntry? _selectedRoomEntry(MapLoaded state) {
+    final String? selectedRoomId = state.selectedRoomId;
+    if (selectedRoomId == null) {
+      return null;
+    }
+
     for (final MapRoomSearchEntry entry in state.searchEntries) {
-      if (entry.roomId == state.selectedRoomId &&
+      if (entry.roomId == selectedRoomId &&
           entry.floor == state.selectedFloor &&
           entry.campus == state.selectedCampus) {
-        return entry.name;
+        return entry;
       }
+    }
+
+    for (final RoomModel room in state.rooms) {
+      if (room.roomId == selectedRoomId) {
+        return MapRoomSearchEntry(
+          roomId: room.roomId,
+          name: room.name,
+          campus: state.selectedCampus,
+          floor: state.selectedFloor,
+        );
+      }
+    }
+
+    return null;
+  }
+
+  String _selectedRoomName(MapLoaded state) {
+    final MapRoomSearchEntry? entry = _selectedRoomEntry(state);
+    if (entry != null) {
+      return entry.name;
     }
 
     for (final RoomModel room in state.rooms) {
@@ -314,6 +356,20 @@ class _MapPageViewState extends State<MapPageView> {
     }
 
     return '';
+  }
+
+  List<MapRouteSegment> _currentFloorRouteSegments(MapLoaded state) {
+    final MapRouteResult? routeResult = state.routeState.result;
+    if (routeResult == null) {
+      return <MapRouteSegment>[];
+    }
+
+    return routeResult.segments
+        .where(
+          (MapRouteSegment segment) =>
+              segment.floorId == state.selectedFloor.id,
+        )
+        .toList(growable: false);
   }
 }
 
@@ -417,17 +473,28 @@ class _MapRoomSearchPanel extends StatelessWidget {
 class _SelectedRoomPanel extends StatelessWidget {
   const _SelectedRoomPanel({
     required this.roomName,
+    required this.selectedRoomEntry,
+    required this.routeState,
     required this.selectedRoomActionBuilder,
+    required this.onSelectRouteStart,
+    required this.onSelectRouteDestination,
+    required this.onClearRoute,
     required this.onClose,
   });
 
   final String roomName;
+  final MapRoomSearchEntry? selectedRoomEntry;
+  final MapRouteState routeState;
   final SelectedRoomActionBuilder selectedRoomActionBuilder;
+  final ValueChanged<MapRoomSearchEntry> onSelectRouteStart;
+  final ValueChanged<MapRoomSearchEntry> onSelectRouteDestination;
+  final VoidCallback onClearRoute;
   final VoidCallback onClose;
 
   @override
   Widget build(BuildContext context) {
     final AppColors colors = Theme.of(context).extension<AppColors>()!;
+    final MapRoomSearchEntry? routeEntry = selectedRoomEntry;
 
     return Material(
       color: colors.background02,
@@ -461,12 +528,148 @@ class _SelectedRoomPanel extends StatelessWidget {
                 ),
               ],
             ),
+            if (routeEntry != null) ...<Widget>[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: <Widget>[
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.trip_origin),
+                    label: const Text('Отсюда'),
+                    onPressed: () => onSelectRouteStart(routeEntry),
+                  ),
+                  FilledButton.icon(
+                    icon: const Icon(Icons.flag_outlined),
+                    label: const Text('Сюда'),
+                    onPressed: () => onSelectRouteDestination(routeEntry),
+                  ),
+                ],
+              ),
+            ],
+            _RouteStatus(routeState: routeState, onClearRoute: onClearRoute),
             selectedRoomActionBuilder(context, roomName),
           ],
         ),
       ),
     );
   }
+}
+
+class _RouteStatus extends StatelessWidget {
+  const _RouteStatus({required this.routeState, required this.onClearRoute});
+
+  final MapRouteState routeState;
+  final VoidCallback onClearRoute;
+
+  @override
+  Widget build(BuildContext context) {
+    if (routeState.start == null &&
+        routeState.destination == null &&
+        routeState.errorMessage == null) {
+      return const SizedBox.shrink();
+    }
+
+    final AppColors colors = Theme.of(context).extension<AppColors>()!;
+    final TextStyle? baseStyle = Theme.of(context).textTheme.bodySmall;
+    final String startName =
+        routeState.start == null
+            ? 'не выбрано'
+            : _routeEntryTitle(routeState.start!);
+    final String destinationName =
+        routeState.destination == null
+            ? 'не выбрано'
+            : _routeEntryTitle(routeState.destination!);
+    final String statusText = _routeStatusText(routeState);
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: colors.background01,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Text(
+                      'Маршрут',
+                      style: baseStyle?.copyWith(
+                        color: colors.active,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Сбросить маршрут',
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.clear),
+                    onPressed: onClearRoute,
+                  ),
+                ],
+              ),
+              Text(
+                'От: $startName',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: baseStyle?.copyWith(color: colors.active),
+              ),
+              Text(
+                'До: $destinationName',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: baseStyle?.copyWith(color: colors.active),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                statusText,
+                style: baseStyle?.copyWith(
+                  color:
+                      routeState.errorMessage == null
+                          ? colors.deactive
+                          : Theme.of(context).colorScheme.error,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+String _routeStatusText(MapRouteState routeState) {
+  if (routeState.errorMessage != null) {
+    return routeState.errorMessage!;
+  }
+
+  if (routeState.isBuilding) {
+    return 'Строю маршрут...';
+  }
+
+  if (routeState.result != null) {
+    return 'Маршрут построен';
+  }
+
+  if (routeState.start == null || routeState.destination == null) {
+    return 'Выберите начало и конец маршрута';
+  }
+
+  return 'Маршрут не построен';
+}
+
+String _routeEntryTitle(MapRoomSearchEntry entry) {
+  if (entry.name.isNotEmpty) {
+    return entry.name;
+  }
+
+  return entry.roomId;
 }
 
 String _formatFloor(int floor) {

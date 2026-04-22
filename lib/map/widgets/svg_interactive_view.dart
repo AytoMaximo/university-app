@@ -13,11 +13,13 @@ class SvgInteractiveMap extends StatefulWidget {
     super.key,
     required this.svgAssetPath,
     required this.selectedRoomId,
+    required this.routeSegments,
     required this.onRoomSelected,
   });
 
   final String svgAssetPath;
   final String? selectedRoomId;
+  final List<MapRouteSegment> routeSegments;
   final ValueChanged<RoomModel> onRoomSelected;
 
   @override
@@ -159,6 +161,11 @@ class _SvgInteractiveMapState extends State<SvgInteractiveMap>
                         fit: BoxFit.none,
                         alignment: Alignment.topLeft,
                         allowDrawingOutsideViewBox: true,
+                      ),
+                    ),
+                    Positioned.fill(
+                      child: CustomPaint(
+                        painter: _RoutePainter(widget.routeSegments),
                       ),
                     ),
                     Positioned.fill(
@@ -409,6 +416,72 @@ class _SvgInteractiveMapState extends State<SvgInteractiveMap>
         controller.dispose();
       }
     });
+  }
+}
+
+class _RoutePainter extends CustomPainter {
+  _RoutePainter(this.segments);
+
+  final List<MapRouteSegment> segments;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (segments.isEmpty) {
+      return;
+    }
+
+    final Paint shadowPaint =
+        Paint()
+          ..color = Colors.black.withValues(alpha: 0.38)
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round
+          ..strokeWidth = 22;
+    final Paint routePaint =
+        Paint()
+          ..color = const Color(0xFFFFC857)
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round
+          ..strokeWidth = 12;
+    final Paint pointPaint =
+        Paint()
+          ..color = const Color(0xFFFFC857)
+          ..style = PaintingStyle.fill;
+    final Paint pointBorderPaint =
+        Paint()
+          ..color = Colors.black.withValues(alpha: 0.48)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 4;
+
+    for (final MapRouteSegment segment in segments) {
+      if (segment.points.length < 2) {
+        continue;
+      }
+
+      final Path path =
+          Path()..moveTo(segment.points.first.dx, segment.points.first.dy);
+      for (final Offset point in segment.points.skip(1)) {
+        path.lineTo(point.dx, point.dy);
+      }
+      canvas
+        ..drawPath(path, shadowPaint)
+        ..drawPath(path, routePaint);
+
+      for (final Offset point in <Offset>[
+        segment.points.first,
+        segment.points.last,
+      ]) {
+        canvas
+          ..drawCircle(point, 15, pointPaint)
+          ..drawCircle(point, 15, pointBorderPaint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_RoutePainter oldDelegate) {
+    return oldDelegate.segments != segments;
   }
 }
 
