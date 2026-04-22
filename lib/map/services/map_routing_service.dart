@@ -366,7 +366,13 @@ class MapRoutingService {
       for (final _StairNode lower in lowerStairs) {
         for (final _StairNode upper in upperStairs) {
           final double distance = (lower.center - upper.center).distance;
-          if (distance > _stairMatchingTolerance) {
+          if (distance > _stairMatchingTolerance ||
+              !_isNearestStairMatch(
+                lower: lower,
+                upper: upper,
+                lowerStairs: lowerStairs,
+                upperStairs: upperStairs,
+              )) {
             continue;
           }
 
@@ -378,6 +384,45 @@ class MapRoutingService {
         }
       }
     }
+  }
+
+  bool _isNearestStairMatch({
+    required _StairNode lower,
+    required _StairNode upper,
+    required List<_StairNode> lowerStairs,
+    required List<_StairNode> upperStairs,
+  }) {
+    final _StairNode? nearestUpper = _nearestStairNode(
+      center: lower.center,
+      stairs: upperStairs,
+    );
+    final _StairNode? nearestLower = _nearestStairNode(
+      center: upper.center,
+      stairs: lowerStairs,
+    );
+
+    return nearestUpper?.nodeIndex == upper.nodeIndex ||
+        nearestLower?.nodeIndex == lower.nodeIndex;
+  }
+
+  _StairNode? _nearestStairNode({
+    required Offset center,
+    required List<_StairNode> stairs,
+  }) {
+    _StairNode? nearestStair;
+    double nearestDistance = double.infinity;
+
+    for (final _StairNode stair in stairs) {
+      final double distance = (center - stair.center).distance;
+      if (distance >= nearestDistance) {
+        continue;
+      }
+
+      nearestDistance = distance;
+      nearestStair = stair;
+    }
+
+    return nearestStair;
   }
 
   int _findNearestGridNode({
@@ -692,7 +737,7 @@ class MapRoutingService {
   }
 
   static const double _gridStep = 24;
-  static const double _stairMatchingTolerance = 80;
+  static const double _stairMatchingTolerance = 240;
   static const double _roomConnectionMaxDistance = 360;
   static const double _stairConnectionMaxDistance = 240;
   static const double _floorTransferWeight = 420;
