@@ -240,7 +240,72 @@ class MapRoutingService {
       }
     }
 
-    return keys;
+    return _removeSmallWalkableComponents(keys);
+  }
+
+  Set<_GridKey> _removeSmallWalkableComponents(Set<_GridKey> keys) {
+    final Set<_GridKey> retainedKeys = <_GridKey>{};
+
+    for (final Set<_GridKey> component in _walkableComponents(keys)) {
+      if (component.length < _minimumWalkableComponentSize) {
+        continue;
+      }
+
+      retainedKeys.addAll(component);
+    }
+
+    return retainedKeys;
+  }
+
+  List<Set<_GridKey>> _walkableComponents(Set<_GridKey> keys) {
+    final List<Set<_GridKey>> components = <Set<_GridKey>>[];
+    final Set<_GridKey> visitedKeys = <_GridKey>{};
+
+    for (final _GridKey key in keys) {
+      if (visitedKeys.contains(key)) {
+        continue;
+      }
+
+      components.add(
+        _collectWalkableComponent(
+          start: key,
+          keys: keys,
+          visitedKeys: visitedKeys,
+        ),
+      );
+    }
+
+    return components;
+  }
+
+  Set<_GridKey> _collectWalkableComponent({
+    required _GridKey start,
+    required Set<_GridKey> keys,
+    required Set<_GridKey> visitedKeys,
+  }) {
+    final Queue<_GridKey> queue = Queue<_GridKey>()..add(start);
+    final Set<_GridKey> component = <_GridKey>{};
+    visitedKeys.add(start);
+
+    while (queue.isNotEmpty) {
+      final _GridKey current = queue.removeFirst();
+      component.add(current);
+
+      for (final _GridDirection direction in _gridDirections) {
+        final _GridKey neighbor = _GridKey(
+          x: current.x + direction.dx,
+          y: current.y + direction.dy,
+        );
+        if (!keys.contains(neighbor) || visitedKeys.contains(neighbor)) {
+          continue;
+        }
+
+        visitedKeys.add(neighbor);
+        queue.add(neighbor);
+      }
+    }
+
+    return component;
   }
 
   _RouteGraph _buildGraph(List<_RouteFloorData> floors) {
@@ -262,9 +327,103 @@ class MapRoutingService {
       }
       graph.gridNodesByFloor[floorData.floor.id] = floorNodes;
       graph.nodeIndexesByFloor[floorData.floor.id] = nodeIndexes;
+      _addWalkableComponentBridges(
+        graph: graph,
+        floorData: floorData,
+        floorNodes: floorNodes,
+      );
     }
 
     return graph;
+  }
+
+  void _addWalkableComponentBridges({
+    required _RouteGraph graph,
+    required _RouteFloorData floorData,
+    required Map<_GridKey, int> floorNodes,
+  }) {
+    final List<Set<_GridKey>> components = _walkableComponents(
+      floorData.walkableKeys,
+    );
+    if (components.length < 2) {
+      return;
+    }
+
+    final Map<_GridKey, int> componentIndexes = <_GridKey, int>{};
+    for (int index = 0; index < components.length; index += 1) {
+      for (final _GridKey key in components[index]) {
+        componentIndexes[key] = index;
+      }
+    }
+
+    final Map<String, _ComponentBridge> bridges = <String, _ComponentBridge>{};
+    final int maxGridOffset =
+        (_walkableComponentBridgeDistance / _gridStep).ceil();
+    final double maxDistanceSquared =
+        _walkableComponentBridgeDistance * _walkableComponentBridgeDistance;
+
+    for (final _GridKey sourceKey in floorData.walkableKeys) {
+      final int? sourceComponentIndex = componentIndexes[sourceKey];
+      final int? sourceNodeIndex = floorNodes[sourceKey];
+      if (sourceComponentIndex == null || sourceNodeIndex == null) {
+        continue;
+      }
+
+      for (int dx = -maxGridOffset; dx <= maxGridOffset; dx += 1) {
+        for (int dy = -maxGridOffset; dy <= maxGridOffset; dy += 1) {
+          if (dx == 0 && dy == 0) {
+            continue;
+          }
+
+          final double distanceSquared =
+              (dx * dx + dy * dy).toDouble() * _gridStep * _gridStep;
+          if (distanceSquared > maxDistanceSquared) {
+            continue;
+          }
+
+          final _GridKey targetKey = _GridKey(
+            x: sourceKey.x + dx,
+            y: sourceKey.y + dy,
+          );
+          final int? targetComponentIndex = componentIndexes[targetKey];
+          final int? targetNodeIndex = floorNodes[targetKey];
+          if (targetComponentIndex == null ||
+              targetNodeIndex == null ||
+              targetComponentIndex == sourceComponentIndex) {
+            continue;
+          }
+
+          final int leftComponentIndex = math.min(
+            sourceComponentIndex,
+            targetComponentIndex,
+          );
+          final int rightComponentIndex = math.max(
+            sourceComponentIndex,
+            targetComponentIndex,
+          );
+          final String bridgeKey = '$leftComponentIndex:$rightComponentIndex';
+          final double distance = math.sqrt(distanceSquared);
+          final _ComponentBridge? currentBridge = bridges[bridgeKey];
+          if (currentBridge != null && currentBridge.distance <= distance) {
+            continue;
+          }
+
+          bridges[bridgeKey] = _ComponentBridge(
+            fromNodeIndex: sourceNodeIndex,
+            toNodeIndex: targetNodeIndex,
+            distance: distance,
+          );
+        }
+      }
+    }
+
+    for (final _ComponentBridge bridge in bridges.values) {
+      graph.addEdge(
+        from: bridge.fromNodeIndex,
+        to: bridge.toNodeIndex,
+        weight: bridge.distance * _walkableComponentBridgeWeightMultiplier,
+      );
+    }
   }
 
   int _addEndpointNode({
@@ -290,19 +449,19 @@ class MapRoutingService {
         gridKey: null,
       ),
     );
-    final int nearestGridNode = _findNearestGridNode(
+    final List<_GridNodeDistance> nearbyGridNodes = _findNearbyGridNodes(
       graph: graph,
       floorData: floorData,
       candidates: _connectionCandidates(room.bounds),
       maxDistance: _roomConnectionMaxDistance,
     );
-    graph.addEdge(
-      from: nodeIndex,
-      to: nearestGridNode,
-      weight:
-          (graph.nodes[nodeIndex].point - graph.nodes[nearestGridNode].point)
-              .distance,
-    );
+    for (final _GridNodeDistance gridNode in nearbyGridNodes) {
+      graph.addEdge(
+        from: nodeIndex,
+        to: gridNode.nodeIndex,
+        weight: gridNode.distance,
+      );
+    }
 
     return nodeIndex;
   }
@@ -338,20 +497,19 @@ class MapRoutingService {
             gridKey: null,
           ),
         );
-        final int nearestGridNode = _findNearestGridNode(
+        final List<_GridNodeDistance> nearbyGridNodes = _findNearbyGridNodes(
           graph: graph,
           floorData: floorData,
           candidates: _connectionCandidates(stair.bounds),
           maxDistance: _stairConnectionMaxDistance,
         );
-        graph.addEdge(
-          from: nodeIndex,
-          to: nearestGridNode,
-          weight:
-              (graph.nodes[nodeIndex].point -
-                      graph.nodes[nearestGridNode].point)
-                  .distance,
-        );
+        for (final _GridNodeDistance gridNode in nearbyGridNodes) {
+          graph.addEdge(
+            from: nodeIndex,
+            to: gridNode.nodeIndex,
+            weight: gridNode.distance,
+          );
+        }
         stairNodes.add(
           _StairNode(
             nodeIndex: nodeIndex,
@@ -508,7 +666,7 @@ class MapRoutingService {
     return objectId.substring(0, familyDelimiterIndex);
   }
 
-  int _findNearestGridNode({
+  List<_GridNodeDistance> _findNearbyGridNodes({
     required _RouteGraph graph,
     required _RouteFloorData floorData,
     required List<Offset> candidates,
@@ -516,28 +674,43 @@ class MapRoutingService {
   }) {
     final List<int> nodeIndexes =
         graph.nodeIndexesByFloor[floorData.floor.id] ?? <int>[];
-    int? nearestNode;
-    double nearestDistance = double.infinity;
+    final List<_GridNodeDistance> nearbyNodes = <_GridNodeDistance>[];
 
     for (final int nodeIndex in nodeIndexes) {
       final Offset point = graph.nodes[nodeIndex].point;
+      double nearestCandidateDistance = double.infinity;
       for (final Offset candidate in candidates) {
         final double distance = (point - candidate).distance;
-        if (distance < nearestDistance) {
-          nearestDistance = distance;
-          nearestNode = nodeIndex;
+        if (distance < nearestCandidateDistance) {
+          nearestCandidateDistance = distance;
         }
       }
+      if (nearestCandidateDistance > maxDistance) {
+        continue;
+      }
+
+      nearbyNodes.add(
+        _GridNodeDistance(
+          nodeIndex: nodeIndex,
+          distance: nearestCandidateDistance,
+        ),
+      );
     }
 
-    final int? node = nearestNode;
-    if (node == null || nearestDistance > maxDistance) {
+    if (nearbyNodes.isEmpty) {
       throw StateError(
         'Не найден ближайший коридор на этаже ${floorData.floor.number}.',
       );
     }
 
-    return node;
+    nearbyNodes.sort(
+      (_GridNodeDistance left, _GridNodeDistance right) =>
+          left.distance.compareTo(right.distance),
+    );
+
+    return nearbyNodes
+        .take(_maximumConnectionNodeCount)
+        .toList(growable: false);
   }
 
   List<Offset> _connectionCandidates(Rect bounds) {
@@ -825,6 +998,10 @@ class MapRoutingService {
   static const double _roomConnectionMaxDistance = 360;
   static const double _stairConnectionMaxDistance = 240;
   static const double _floorTransferWeight = 420;
+  static const double _walkableComponentBridgeDistance = 336;
+  static const double _walkableComponentBridgeWeightMultiplier = 2;
+  static const int _minimumWalkableComponentSize = 12;
+  static const int _maximumConnectionNodeCount = 12;
   static final List<_GridDirection> _gridDirections = <_GridDirection>[
     _GridDirection(dx: -1, dy: -1, weight: math.sqrt2),
     _GridDirection(dx: 0, dy: -1, weight: 1),
@@ -913,6 +1090,25 @@ class _RouteEdge {
 
   final int to;
   final double weight;
+}
+
+class _GridNodeDistance {
+  const _GridNodeDistance({required this.nodeIndex, required this.distance});
+
+  final int nodeIndex;
+  final double distance;
+}
+
+class _ComponentBridge {
+  const _ComponentBridge({
+    required this.fromNodeIndex,
+    required this.toNodeIndex,
+    required this.distance,
+  });
+
+  final int fromNodeIndex;
+  final int toNodeIndex;
+  final double distance;
 }
 
 class _RouteGraph {

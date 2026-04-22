@@ -222,25 +222,10 @@ class _SvgInteractiveMapState extends State<SvgInteractiveMap>
 
     final Offset localPos = details.localPosition;
     final Offset tapPos = _transformationController.toScene(localPos);
-    final List<RoomModel> containing = state.rooms
-        .where((RoomModel room) => room.path.contains(tapPos))
-        .toList(growable: false);
-    if (containing.isEmpty) {
-      return;
-    }
-
-    RoomModel? selected;
-    double minDist = double.infinity;
-    for (final RoomModel room in containing) {
-      final Offset center = room.path.getBounds().center;
-      final double dist = (center - tapPos).distance;
-      if (dist < minDist) {
-        minDist = dist;
-        selected = room;
-      }
-    }
-
-    final RoomModel? selectedRoom = selected;
+    final RoomModel? selectedRoom = findRoomAtPoint(
+      rooms: state.rooms,
+      point: tapPos,
+    );
     if (selectedRoom == null) {
       return;
     }

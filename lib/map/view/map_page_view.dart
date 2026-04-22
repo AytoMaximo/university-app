@@ -139,8 +139,13 @@ class _MapPageViewState extends State<MapPageView> {
               return const Center(child: CircularProgressIndicator());
             }
 
+            final MediaQueryData mediaQuery = MediaQuery.of(context);
+            final bool isCompactWidth = mediaQuery.size.width < 560;
             final bool isLandscape =
-                MediaQuery.of(context).orientation == Orientation.landscape;
+                mediaQuery.orientation == Orientation.landscape;
+            final bool shouldShowSelectedRoomPanel =
+                state.selectedRoomId != null &&
+                !(isCompactWidth && _activeRouteSearchField != null);
             return Stack(
               children: <Widget>[
                 Column(
@@ -162,9 +167,9 @@ class _MapPageViewState extends State<MapPageView> {
                 Positioned(
                   top: 16,
                   left: 16,
-                  right: MediaQuery.of(context).size.width < 560 ? 132 : null,
+                  right: isCompactWidth ? 132 : null,
                   child: SizedBox(
-                    width: MediaQuery.of(context).size.width < 560 ? null : 420,
+                    width: isCompactWidth ? null : 420,
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
@@ -299,14 +304,13 @@ class _MapPageViewState extends State<MapPageView> {
                             ),
                   ),
                 ),
-                if (state.selectedRoomId != null)
+                if (shouldShowSelectedRoomPanel)
                   Positioned(
                     left: 16,
-                    right: MediaQuery.of(context).size.width < 560 ? 84 : null,
+                    right: isCompactWidth ? 84 : null,
                     bottom: widget.controlsBottomOffset,
                     child: SizedBox(
-                      width:
-                          MediaQuery.of(context).size.width < 560 ? null : 360,
+                      width: isCompactWidth ? null : 360,
                       child: _SelectedRoomPanel(
                         roomName: _selectedRoomName(state),
                         selectedRoomEntry: _selectedRoomEntry(state),

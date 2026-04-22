@@ -39,11 +39,12 @@ class SvgPathParser {
     required Map<String, xml.XmlElement> elementsById,
   }) {
     final Path path = Path()..fillType = _parseFillType(element);
+    final Matrix4 inheritedTransform = _ancestorTransform(element);
     _addElementPath(
       targetPath: path,
       element: element,
       elementsById: elementsById,
-      parentTransform: Matrix4.identity(),
+      parentTransform: inheritedTransform,
     );
 
     if (path.getBounds().isEmpty) {
@@ -69,6 +70,26 @@ class SvgPathParser {
       caseSensitive: false,
     ).firstMatch(style);
     return match?.group(2)?.trim().toLowerCase();
+  }
+
+  static Matrix4 _ancestorTransform(xml.XmlElement element) {
+    final List<xml.XmlElement> ancestors = <xml.XmlElement>[];
+    xml.XmlNode? parent = element.parent;
+    while (parent is xml.XmlElement &&
+        parent.name.local.toLowerCase() != 'svg') {
+      ancestors.add(parent);
+      parent = parent.parent;
+    }
+
+    Matrix4 transform = Matrix4.identity();
+    for (final xml.XmlElement ancestor in ancestors.reversed) {
+      transform = _combinedTransform(
+        transform,
+        ancestor.getAttribute('transform'),
+      );
+    }
+
+    return transform;
   }
 
   static Matrix4? parseTransform(String? transformAttr) {
