@@ -350,6 +350,7 @@ class _MapRoomSearchPanel extends StatelessWidget {
           TextField(
             controller: controller,
             focusNode: focusNode,
+            textAlignVertical: TextAlignVertical.center,
             textInputAction: TextInputAction.search,
             decoration: InputDecoration(
               hintText: 'Найти аудиторию',
