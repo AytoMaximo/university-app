@@ -1,0 +1,10 @@
+{
+  "buildCommand": "bash tools/vercel_build_flutter_web.sh",
+  "outputDirectory": "build/web",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/"
+    }
+  ]
+}

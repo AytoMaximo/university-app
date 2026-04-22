@@ -29,11 +29,22 @@ class FloorSelected extends MapEvent {
   List<Object?> get props => [selectedFloor];
 }
 
-class RoomTapped extends MapEvent {
+class RoomSelected extends MapEvent {
   final String roomId;
 
-  const RoomTapped(this.roomId);
+  const RoomSelected(this.roomId);
 
   @override
   List<Object?> get props => [roomId];
+}
+
+class RoomSelectionCleared extends MapEvent {}
+
+class RoomSearchResultSelected extends MapEvent {
+  const RoomSearchResultSelected(this.searchEntry);
+
+  final MapRoomSearchEntry searchEntry;
+
+  @override
+  List<Object?> get props => <Object?>[searchEntry];
 }

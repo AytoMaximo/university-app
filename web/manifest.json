@@ -1,12 +1,12 @@
 {
-    "name": "rtu_mirea_app",
-    "short_name": "rtu_mirea_app",
+    "name": "Карта университета",
+    "short_name": "Карта",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
-    "orientation": "portrait-primary",
+    "background_color": "#FFFFFF",
+    "theme_color": "#FFFFFF",
+    "description": "Интерактивная карта университета с поиском аудиторий.",
+    "orientation": "any",
     "prefer_related_applications": false,
     "icons": [
         {

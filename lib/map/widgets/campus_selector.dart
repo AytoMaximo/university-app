@@ -1,5 +1,5 @@
+import 'package:app_ui/src/colors/colors.dart';
 import 'package:flutter/material.dart';
-import 'package:app_ui/app_ui.dart';
 import 'package:rtu_mirea_app/map/map.dart';
 
 class CampusSelector extends StatelessWidget {
@@ -21,24 +21,39 @@ class CampusSelector extends StatelessWidget {
       decoration: BoxDecoration(
         color: Theme.of(context).extension<AppColors>()!.background02,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Theme.of(context).extension<AppColors>()!.divider, width: 1),
+        border: Border.all(
+          color: Theme.of(context).extension<AppColors>()!.divider,
+          width: 1,
+        ),
       ),
       child: DropdownButton<CampusModel>(
         value: selectedCampus,
         isExpanded: true,
         underline: const SizedBox(),
-        icon: Icon(Icons.arrow_drop_down, color: Theme.of(context).extension<AppColors>()!.active),
-        style: AppTextStyle.bodyBold.copyWith(color: Theme.of(context).extension<AppColors>()!.active),
+        icon: Icon(
+          Icons.arrow_drop_down,
+          color: Theme.of(context).extension<AppColors>()!.active,
+        ),
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+          color: Theme.of(context).extension<AppColors>()!.active,
+          fontWeight: FontWeight.w700,
+        ),
         dropdownColor: Theme.of(context).extension<AppColors>()!.background02,
         items:
             campuses.map((campus) {
               return DropdownMenuItem<CampusModel>(
                 value: campus,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 8,
+                    horizontal: 4,
+                  ),
                   child: Text(
                     campus.displayName,
-                    style: AppTextStyle.bodyBold.copyWith(color: Theme.of(context).extension<AppColors>()!.active),
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).extension<AppColors>()!.active,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
               );

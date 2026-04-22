@@ -4,17 +4,26 @@ import 'package:bloc/bloc.dart';
 import 'package:rtu_mirea_app/map/map.dart';
 
 class MapBloc extends Bloc<MapEvent, MapState> {
-  final List<CampusModel> availableCampuses;
-  final ObjectsService objectsService;
-
-  MapBloc({required this.availableCampuses, required this.objectsService}) : super(const MapInitial()) {
+  MapBloc({required this.availableCampuses, required this.objectsService})
+    : super(const MapInitial()) {
     on<MapInitialized>(_onMapInitialized);
     on<CampusSelected>(_onCampusSelected);
     on<FloorSelected>(_onFloorSelected);
-    on<RoomTapped>(_onRoomTapped);
+    on<RoomSelected>(_onRoomSelected);
+    on<RoomSelectionCleared>(_onRoomSelectionCleared);
+    on<RoomSearchResultSelected>(_onRoomSearchResultSelected);
   }
 
-  Future<void> _onMapInitialized(MapInitialized event, Emitter<MapState> emit) async {
+  final List<CampusModel> availableCampuses;
+  final ObjectsService objectsService;
+  final Map<String, (List<RoomModel>, Rect)> _floorRoomsCache =
+      <String, (List<RoomModel>, Rect)>{};
+  List<MapRoomSearchEntry> _searchEntries = <MapRoomSearchEntry>[];
+
+  Future<void> _onMapInitialized(
+    MapInitialized event,
+    Emitter<MapState> emit,
+  ) async {
     if (availableCampuses.isEmpty) {
       emit(const MapError('Нет доступных кампусов.'));
       return;
@@ -23,67 +32,202 @@ class MapBloc extends Bloc<MapEvent, MapState> {
 
     try {
       await objectsService.loadObjects();
-      final campus = availableCampuses.first;
-      final floor = campus.floors.first;
-      final (rooms, rect) = await _parseFloor(floor);
-      emit(MapLoaded(selectedCampus: campus, selectedFloor: floor, rooms: rooms, boundingRect: rect));
-    } catch (e) {
-      emit(MapError('Ошибка инициализации карты: $e'));
+      _searchEntries = await _buildSearchEntries();
+      final CampusModel campus = availableCampuses.first;
+      final FloorModel floor = campus.floors.first;
+      final (List<RoomModel>, Rect) floorData = await _parseFloor(floor);
+      emit(
+        MapLoaded(
+          selectedCampus: campus,
+          selectedFloor: floor,
+          rooms: _roomsWithSelection(floorData.$1, null),
+          searchEntries: _searchEntries,
+          boundingRect: floorData.$2,
+        ),
+      );
+    } catch (error) {
+      emit(MapError('Ошибка инициализации карты: $error'));
     }
   }
 
-  Future<void> _onCampusSelected(CampusSelected event, Emitter<MapState> emit) async {
+  Future<void> _onCampusSelected(
+    CampusSelected event,
+    Emitter<MapState> emit,
+  ) async {
     emit(const MapLoading());
     try {
-      final floor = event.selectedCampus.floors.first;
-      final (rooms, rect) = await _parseFloor(floor);
-      emit(MapLoaded(selectedCampus: event.selectedCampus, selectedFloor: floor, rooms: rooms, boundingRect: rect));
-    } catch (e) {
-      emit(MapError('Ошибка загрузки кампуса: $e'));
+      final FloorModel floor = event.selectedCampus.floors.first;
+      final (List<RoomModel>, Rect) floorData = await _parseFloor(floor);
+      emit(
+        MapLoaded(
+          selectedCampus: event.selectedCampus,
+          selectedFloor: floor,
+          rooms: _roomsWithSelection(floorData.$1, null),
+          searchEntries: _searchEntries,
+          boundingRect: floorData.$2,
+        ),
+      );
+    } catch (error) {
+      emit(MapError('Ошибка загрузки кампуса: $error'));
     }
   }
 
-  Future<void> _onFloorSelected(FloorSelected event, Emitter<MapState> emit) async {
+  Future<void> _onFloorSelected(
+    FloorSelected event,
+    Emitter<MapState> emit,
+  ) async {
     emit(const MapLoading());
     try {
-      final (rooms, rect) = await _parseFloor(event.selectedFloor);
+      final (List<RoomModel>, Rect) floorData = await _parseFloor(
+        event.selectedFloor,
+      );
       emit(
         MapLoaded(
           selectedCampus: event.selectedCampus,
           selectedFloor: event.selectedFloor,
-          rooms: rooms,
-          boundingRect: rect,
+          rooms: _roomsWithSelection(floorData.$1, null),
+          searchEntries: _searchEntries,
+          boundingRect: floorData.$2,
         ),
       );
-    } catch (e) {
-      emit(MapError('Ошибка загрузки этажа: $e'));
+    } catch (error) {
+      emit(MapError('Ошибка загрузки этажа: $error'));
     }
   }
 
-  void _onRoomTapped(RoomTapped event, Emitter<MapState> emit) {
-    if (state is MapLoaded) {
-      final currentState = state as MapLoaded;
-      final updatedRooms =
-          currentState.rooms.map((room) {
-            if (room.roomId == event.roomId) {
-              return room.copyWith(isSelected: !room.isSelected);
-            }
-            return room;
-          }).toList();
+  void _onRoomSelected(RoomSelected event, Emitter<MapState> emit) {
+    if (state is! MapLoaded) {
+      return;
+    }
 
-      emit(currentState.copyWith(rooms: updatedRooms));
+    final MapLoaded currentState = state as MapLoaded;
+    emit(
+      currentState.copyWith(
+        rooms: _roomsWithSelection(currentState.rooms, event.roomId),
+        selectedRoomId: event.roomId,
+      ),
+    );
+  }
+
+  void _onRoomSelectionCleared(
+    RoomSelectionCleared event,
+    Emitter<MapState> emit,
+  ) {
+    if (state is! MapLoaded) {
+      return;
+    }
+
+    final MapLoaded currentState = state as MapLoaded;
+    emit(currentState.withoutSelectedRoom());
+  }
+
+  Future<void> _onRoomSearchResultSelected(
+    RoomSearchResultSelected event,
+    Emitter<MapState> emit,
+  ) async {
+    emit(const MapLoading());
+    try {
+      final (List<RoomModel>, Rect) floorData = await _parseFloor(
+        event.searchEntry.floor,
+      );
+      emit(
+        MapLoaded(
+          selectedCampus: event.searchEntry.campus,
+          selectedFloor: event.searchEntry.floor,
+          rooms: _roomsWithSelection(floorData.$1, event.searchEntry.roomId),
+          searchEntries: _searchEntries,
+          boundingRect: floorData.$2,
+          selectedRoomId: event.searchEntry.roomId,
+        ),
+      );
+    } catch (error) {
+      emit(MapError('Ошибка поиска аудитории: $error'));
     }
   }
 
   Future<(List<RoomModel>, Rect)> _parseFloor(FloorModel floor) async {
-    final (parsedRooms, boundingRect) = await SvgRoomsParser.parseSvg(floor.svgPath);
-    final rooms =
-        parsedRooms.map((room) {
-          final idParts = room.roomId.split('__r__');
-          final id = idParts.length > 1 ? idParts[1] : '';
-          final name = room.name.isNotEmpty ? room.name : objectsService.getNameById(id) ?? '';
-          return RoomModel(roomId: room.roomId, name: name, path: room.path, isSelected: room.isSelected);
-        }).toList();
-    return (rooms, boundingRect);
+    final (List<RoomModel>, Rect)? cachedRooms = _floorRoomsCache[floor.id];
+    if (cachedRooms != null) {
+      return cachedRooms;
+    }
+
+    final (List<RoomModel>, Rect) parsedSvg = await SvgRoomsParser.parseSvg(
+      floor.svgPath,
+    );
+    final List<RoomModel> rooms = parsedSvg.$1
+        .map((RoomModel room) {
+          final List<String> idParts = room.roomId.split('__r__');
+          final String id = idParts.length > 1 ? idParts[1] : '';
+          final String name =
+              room.name.isNotEmpty
+                  ? room.name
+                  : objectsService.getNameById(id) ?? '';
+          return RoomModel(
+            roomId: room.roomId,
+            name: name,
+            path: room.path,
+            isSelected: room.isSelected,
+          );
+        })
+        .toList(growable: false);
+
+    final (List<RoomModel>, Rect) parsedFloor = (rooms, parsedSvg.$2);
+    _floorRoomsCache[floor.id] = parsedFloor;
+    return parsedFloor;
+  }
+
+  Future<List<MapRoomSearchEntry>> _buildSearchEntries() async {
+    final List<MapRoomSearchEntry> entries = <MapRoomSearchEntry>[];
+
+    for (final CampusModel campus in availableCampuses) {
+      for (final FloorModel floor in campus.floors) {
+        final (List<RoomModel>, Rect) floorData = await _parseFloor(floor);
+        for (final RoomModel room in floorData.$1) {
+          if (room.name.isEmpty) {
+            continue;
+          }
+
+          entries.add(
+            MapRoomSearchEntry(
+              roomId: room.roomId,
+              name: room.name,
+              campus: campus,
+              floor: floor,
+            ),
+          );
+        }
+      }
+    }
+
+    entries.sort((MapRoomSearchEntry left, MapRoomSearchEntry right) {
+      final int nameComparison = left.name.compareTo(right.name);
+      if (nameComparison != 0) {
+        return nameComparison;
+      }
+
+      final int campusComparison = left.campus.displayName.compareTo(
+        right.campus.displayName,
+      );
+      if (campusComparison != 0) {
+        return campusComparison;
+      }
+
+      return left.floor.number.compareTo(right.floor.number);
+    });
+
+    return entries;
+  }
+
+  List<RoomModel> _roomsWithSelection(
+    List<RoomModel> rooms,
+    String? selectedRoomId,
+  ) {
+    return rooms
+        .map(
+          (RoomModel room) => room.copyWith(
+            isSelected: selectedRoomId != null && room.roomId == selectedRoomId,
+          ),
+        )
+        .toList(growable: false);
   }
 }

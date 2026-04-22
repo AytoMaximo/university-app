@@ -15,6 +15,7 @@ import 'package:rtu_mirea_app/navigation/view/scaffold_navigation_shell.dart';
 import 'package:rtu_mirea_app/feed/feed.dart';
 import 'package:rtu_mirea_app/onboarding/view/onboarding_page.dart';
 import 'package:rtu_mirea_app/profile/view/profile_settings_page.dart';
+import 'package:rtu_mirea_app/presentation/constants.dart';
 import 'package:rtu_mirea_app/rating_system_calculator/models/subject.dart';
 import 'package:rtu_mirea_app/rating_system_calculator/view/about_rating_system_page.dart';
 import 'package:rtu_mirea_app/rating_system_calculator/view/rating_system_calculator_page.dart';
@@ -260,7 +261,10 @@ class MapRoute extends GoRouteData {
 
   @override
   Widget build(BuildContext context, GoRouterState state) {
-    return const MapPageView();
+    return MapPageView(
+      controlsBottomOffset: bottomNavigationBarHeight + 32,
+      selectedRoomActionBuilder: buildScheduleSearchSelectedRoomAction,
+    );
   }
 }
 

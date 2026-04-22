@@ -1,8 +1,13 @@
+import 'package:app_ui/src/colors/colors.dart';
 import 'package:flutter/material.dart';
-import 'package:app_ui/app_ui.dart';
 
 class MapNavigationButton extends StatelessWidget {
-  const MapNavigationButton({super.key, required this.floor, required this.onClick, required this.isSelected});
+  const MapNavigationButton({
+    super.key,
+    required this.floor,
+    required this.onClick,
+    required this.isSelected,
+  });
 
   final int floor;
   final Function onClick;
@@ -28,11 +33,12 @@ class MapNavigationButton extends StatelessWidget {
         child: Center(
           child: Text(
             floor.toString(),
-            style: AppTextStyle.buttonS.copyWith(
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(
               color:
                   isSelected
                       ? Theme.of(context).extension<AppColors>()!.active
                       : Theme.of(context).extension<AppColors>()!.deactive,
+              fontWeight: FontWeight.w700,
             ),
           ),
         ),

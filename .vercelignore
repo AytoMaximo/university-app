@@ -1,0 +1,13 @@
+api/**
+supabase/**
+android/**
+ios/**
+linux/**
+macos/**
+windows/**
+wear/**
+test/**
+.github/**
+.cursor/**
+.idea/**
+.vscode/**

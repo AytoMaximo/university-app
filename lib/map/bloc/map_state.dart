@@ -30,26 +30,62 @@ class MapLoaded extends MapState {
   final CampusModel selectedCampus;
   final FloorModel selectedFloor;
   final List<RoomModel> rooms;
+  final List<MapRoomSearchEntry> searchEntries;
   final Rect? boundingRect;
+  final String? selectedRoomId;
 
-  const MapLoaded({required this.selectedCampus, required this.selectedFloor, required this.rooms, this.boundingRect});
+  const MapLoaded({
+    required this.selectedCampus,
+    required this.selectedFloor,
+    required this.rooms,
+    required this.searchEntries,
+    this.boundingRect,
+    this.selectedRoomId,
+  });
 
   MapLoaded copyWith({
     CampusModel? selectedCampus,
     FloorModel? selectedFloor,
     List<RoomModel>? rooms,
+    List<MapRoomSearchEntry>? searchEntries,
     Rect? boundingRect,
+    String? selectedRoomId,
   }) {
     return MapLoaded(
       selectedCampus: selectedCampus ?? this.selectedCampus,
       selectedFloor: selectedFloor ?? this.selectedFloor,
       rooms: rooms ?? this.rooms,
+      searchEntries: searchEntries ?? this.searchEntries,
       boundingRect: boundingRect ?? this.boundingRect,
+      selectedRoomId: selectedRoomId ?? this.selectedRoomId,
     );
   }
 
+  MapLoaded withoutSelectedRoom() {
+    return MapLoaded(
+      selectedCampus: selectedCampus,
+      selectedFloor: selectedFloor,
+      rooms: _roomsWithoutSelection(rooms),
+      searchEntries: searchEntries,
+      boundingRect: boundingRect,
+    );
+  }
+
+  static List<RoomModel> _roomsWithoutSelection(List<RoomModel> rooms) {
+    return rooms
+        .map((RoomModel room) => room.copyWith(isSelected: false))
+        .toList(growable: false);
+  }
+
   @override
-  List<Object?> get props => [selectedCampus, selectedFloor, rooms, boundingRect];
+  List<Object?> get props => <Object?>[
+    selectedCampus,
+    selectedFloor,
+    rooms,
+    searchEntries,
+    boundingRect,
+    selectedRoomId,
+  ];
 }
 
 class MapError extends MapState {

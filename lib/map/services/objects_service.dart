@@ -1,5 +1,6 @@
 import 'dart:convert';
-import 'package:app_ui/app_ui.dart';
+
+import 'package:app_ui/src/generated/generated.dart';
 import 'package:flutter/services.dart';
 
 class ObjectsService {
