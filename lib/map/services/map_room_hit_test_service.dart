@@ -21,15 +21,8 @@ List<RoomModel> _roomsContainingPoint({
   required List<RoomModel> rooms,
   required Offset point,
 }) {
-  final List<RoomModel> preciseRooms = rooms
-      .where((RoomModel room) => room.path.contains(point))
-      .toList(growable: false);
-  if (preciseRooms.isNotEmpty) {
-    return preciseRooms;
-  }
-
   return rooms
-      .where((RoomModel room) => room.path.getBounds().contains(point))
+      .where((RoomModel room) => room.path.contains(point))
       .toList(growable: false);
 }
 

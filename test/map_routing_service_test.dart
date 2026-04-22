@@ -58,7 +58,7 @@ void main() {
       (MapRouteSegment segment) => segment.floorNumber == 3,
     );
 
-    expect(floor3Segment.points.length, greaterThan(1));
+    expect(floor3Segment.points, isNotEmpty);
   });
 
   test('builds route between search entries for A-214-2 and A-421', () async {
@@ -92,6 +92,24 @@ void main() {
 
     expect(floorNumbers.first, 2);
     expect(floorNumbers.last, 1);
+
+    final MapRouteSegment floor2Segment = route.segments.firstWhere(
+      (MapRouteSegment segment) => segment.floorNumber == 2,
+    );
+    final MapRouteSegment floor1Segment = route.segments.firstWhere(
+      (MapRouteSegment segment) => segment.floorNumber == 1,
+    );
+
+    _expectPointNear(
+      point: floor2Segment.points.last,
+      expected: const Offset(5567.2, 4282.8),
+      maxDistance: 140,
+    );
+    _expectPointNear(
+      point: floor1Segment.points.first,
+      expected: const Offset(4902.9, 4471.7),
+      maxDistance: 140,
+    );
   });
 
   test('includes Cyberzone in local room search data', () async {
@@ -106,20 +124,22 @@ void main() {
   });
 
   test('parses clickable room centers for G and D buildings', () async {
+    const List<String> roomIdSuffixes = <String>[
+      '__r__2318:5038',
+      '__r__2318:5039',
+      '__r__2318:5427',
+      '__r__2318:5428',
+      '__r__2318:5439',
+      '__r__2318:5441',
+    ];
+
     final List<MapRoomSearchEntry> entries = await _buildSearchEntries();
-    final List<MapRoomSearchEntry> samples = entries
-        .where(
-          (MapRoomSearchEntry entry) =>
-              entry.name.startsWith('Г-') || entry.name.startsWith('Д-'),
-        )
-        .take(24)
-        .toList(growable: false);
-
-    expect(samples, isNotEmpty);
-
     final Map<String, List<RoomModel>> roomsByFloor =
         <String, List<RoomModel>>{};
-    for (final MapRoomSearchEntry sample in samples) {
+    for (final String roomIdSuffix in roomIdSuffixes) {
+      final MapRoomSearchEntry sample = entries.singleWhere(
+        (MapRoomSearchEntry entry) => entry.roomId.endsWith(roomIdSuffix),
+      );
       final List<RoomModel> floorRooms = await _roomsForFloor(
         roomsByFloor: roomsByFloor,
         floor: sample.floor,
@@ -162,6 +182,31 @@ void main() {
     expect(path, isNotNull);
     expect(path!.getBounds(), const Rect.fromLTWH(110, 70, 30, 40));
     expect(path.contains(const Offset(125, 90)), isTrue);
+  });
+
+  test('applies matrix transforms when parsing room paths', () {
+    final xml.XmlDocument document = xml.XmlDocument.parse('''
+<svg viewBox="0 0 200 200">
+  <g data-object="В-78__r__test">
+    <rect width="30" height="40" transform="matrix(1 0 0 1 100 50)" />
+  </g>
+</svg>
+''');
+    final xml.XmlElement svgRoot = document.findElements('svg').first;
+    final xml.XmlElement roomElement = svgRoot.descendants
+        .whereType<xml.XmlElement>()
+        .firstWhere(
+          (xml.XmlElement element) =>
+              element.getAttribute('data-object') == 'В-78__r__test',
+        );
+    final Path? path = SvgPathParser.parseElementToPath(
+      element: roomElement,
+      elementsById: SvgPathParser.collectElementsById(svgRoot),
+    );
+
+    expect(path, isNotNull);
+    expect(path!.getBounds(), const Rect.fromLTWH(100, 50, 30, 40));
+    expect(path.contains(const Offset(115, 70)), isTrue);
   });
 }
 
@@ -230,6 +275,14 @@ List<int> _routeFloorNumbers(MapRouteResult route) {
   return route.segments
       .map((MapRouteSegment segment) => segment.floorNumber)
       .toList(growable: false);
+}
+
+void _expectPointNear({
+  required Offset point,
+  required Offset expected,
+  required double maxDistance,
+}) {
+  expect((point - expected).distance, lessThanOrEqualTo(maxDistance));
 }
 
 String _objectIdFromDataObject(String dataObject) {

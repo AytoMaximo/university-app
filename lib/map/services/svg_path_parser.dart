@@ -140,10 +140,10 @@ class SvgPathParser {
             final double tangent = math.tan(_degreesToRadians(values[0]));
             current.setValues(
               1,
+              0,
+              0,
+              0,
               tangent,
-              0,
-              0,
-              0,
               1,
               0,
               0,
@@ -163,10 +163,10 @@ class SvgPathParser {
             final double tangent = math.tan(_degreesToRadians(values[0]));
             current.setValues(
               1,
-              0,
-              0,
-              0,
               tangent,
+              0,
+              0,
+              0,
               1,
               0,
               0,
@@ -189,7 +189,7 @@ class SvgPathParser {
             final double d = values[3];
             final double e = values[4];
             final double f = values[5];
-            current.setValues(a, c, 0, e, b, d, 0, f, 0, 0, 1, 0, 0, 0, 0, 1);
+            current.setValues(a, b, 0, 0, c, d, 0, 0, 0, 0, 1, 0, e, f, 0, 1);
           }
           break;
         default:

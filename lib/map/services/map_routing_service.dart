@@ -166,6 +166,7 @@ class MapRoutingService {
 
     return _RouteFloorData(
       floor: floor,
+      walkableAreas: walkableAreas,
       walkableKeys: walkableKeys,
       rooms: rooms,
       stairs: stairs,
@@ -393,6 +394,16 @@ class MapRoutingService {
             continue;
           }
 
+          final Offset sourcePoint = _pointFromKey(sourceKey);
+          final Offset targetPoint = _pointFromKey(targetKey);
+          if (!_lineIsInsideWalkableAreas(
+            start: sourcePoint,
+            end: targetPoint,
+            walkableAreas: floorData.walkableAreas,
+          )) {
+            continue;
+          }
+
           final int leftComponentIndex = math.min(
             sourceComponentIndex,
             targetComponentIndex,
@@ -514,7 +525,7 @@ class MapRoutingService {
           _StairNode(
             nodeIndex: nodeIndex,
             center: stair.bounds.center,
-            familyId: _stairFamilyId(stair.dataObject),
+            objectId: _stairObjectId(stair.dataObject),
           ),
         );
       }
@@ -538,13 +549,7 @@ class MapRoutingService {
                 upperStairs: upperStairs,
                 distance: distance,
               ) &&
-              !_canConnectStairsByFamily(
-                lower: lower,
-                upper: upper,
-                lowerStairs: lowerStairs,
-                upperStairs: upperStairs,
-                distance: distance,
-              )) {
+              !_canConnectStairsByManualPair(lower: lower, upper: upper)) {
             continue;
           }
 
@@ -577,30 +582,29 @@ class MapRoutingService {
     );
   }
 
-  bool _canConnectStairsByFamily({
+  bool _canConnectStairsByManualPair({
     required _StairNode lower,
     required _StairNode upper,
-    required List<_StairNode> lowerStairs,
-    required List<_StairNode> upperStairs,
-    required double distance,
   }) {
-    if (lower.familyId != upper.familyId ||
-        distance > _stairFamilyMatchingTolerance) {
-      return false;
+    return _manualStairLinkIds.contains(
+          _manualStairLinkId(lower.objectId, upper.objectId),
+        ) ||
+        _manualStairLinkIds.contains(
+          _manualStairLinkId(upper.objectId, lower.objectId),
+        );
+  }
+
+  String _manualStairLinkId(String firstObjectId, String secondObjectId) {
+    return '$firstObjectId|$secondObjectId';
+  }
+
+  String _stairObjectId(String dataObject) {
+    final int stairMarkerIndex = dataObject.indexOf('__s__');
+    if (stairMarkerIndex < 0) {
+      return dataObject;
     }
 
-    return _isNearestStairMatch(
-      lower: lower,
-      upper: upper,
-      lowerStairs: _stairsByFamily(
-        stairs: lowerStairs,
-        familyId: lower.familyId,
-      ),
-      upperStairs: _stairsByFamily(
-        stairs: upperStairs,
-        familyId: upper.familyId,
-      ),
-    );
+    return dataObject.substring(stairMarkerIndex + 5);
   }
 
   bool _isNearestStairMatch({
@@ -640,30 +644,6 @@ class MapRoutingService {
     }
 
     return nearestStair;
-  }
-
-  List<_StairNode> _stairsByFamily({
-    required List<_StairNode> stairs,
-    required String familyId,
-  }) {
-    return stairs
-        .where((_StairNode stair) => stair.familyId == familyId)
-        .toList(growable: false);
-  }
-
-  String _stairFamilyId(String dataObject) {
-    final int stairMarkerIndex = dataObject.indexOf('__s__');
-    if (stairMarkerIndex < 0) {
-      return dataObject;
-    }
-
-    final String objectId = dataObject.substring(stairMarkerIndex + 5);
-    final int familyDelimiterIndex = objectId.indexOf(':');
-    if (familyDelimiterIndex < 0) {
-      return objectId;
-    }
-
-    return objectId.substring(0, familyDelimiterIndex);
   }
 
   List<_GridNodeDistance> _findNearbyGridNodes({
@@ -942,6 +922,43 @@ class MapRoutingService {
     return true;
   }
 
+  bool _lineIsInsideWalkableAreas({
+    required Offset start,
+    required Offset end,
+    required List<_WalkableArea> walkableAreas,
+  }) {
+    final double distance = (end - start).distance;
+    final int steps = math.max(2, (distance / (_gridStep / 3)).ceil());
+    for (int index = 0; index <= steps; index += 1) {
+      final double ratio = index / steps;
+      final Offset point = Offset.lerp(start, end, ratio)!;
+      if (!_pointIsInsideWalkableAreas(
+        point: point,
+        walkableAreas: walkableAreas,
+      )) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  bool _pointIsInsideWalkableAreas({
+    required Offset point,
+    required List<_WalkableArea> walkableAreas,
+  }) {
+    for (final _WalkableArea walkableArea in walkableAreas) {
+      if (!walkableArea.bounds.contains(point)) {
+        continue;
+      }
+      if (walkableArea.path.contains(point)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   bool _pointIsWalkable({
     required Offset point,
     required Set<_GridKey> walkableKeys,
@@ -994,7 +1011,6 @@ class MapRoutingService {
 
   static const double _gridStep = 24;
   static const double _stairCoordinateMatchingTolerance = 80;
-  static const double _stairFamilyMatchingTolerance = 280;
   static const double _roomConnectionMaxDistance = 360;
   static const double _stairConnectionMaxDistance = 240;
   static const double _floorTransferWeight = 420;
@@ -1002,6 +1018,10 @@ class MapRoutingService {
   static const double _walkableComponentBridgeWeightMultiplier = 2;
   static const int _minimumWalkableComponentSize = 12;
   static const int _maximumConnectionNodeCount = 12;
+  static final Set<String> _manualStairLinkIds = <String>{
+    '2318:6530|2318:5360',
+    '2318:4486|2318:4298',
+  };
   static final List<_GridDirection> _gridDirections = <_GridDirection>[
     _GridDirection(dx: -1, dy: -1, weight: math.sqrt2),
     _GridDirection(dx: 0, dy: -1, weight: 1),
@@ -1033,12 +1053,14 @@ class _RouteObject {
 class _RouteFloorData {
   const _RouteFloorData({
     required this.floor,
+    required this.walkableAreas,
     required this.walkableKeys,
     required this.rooms,
     required this.stairs,
   });
 
   final FloorModel floor;
+  final List<_WalkableArea> walkableAreas;
   final Set<_GridKey> walkableKeys;
   final Map<String, _RouteObject> rooms;
   final List<_RouteObject> stairs;
@@ -1137,12 +1159,12 @@ class _StairNode {
   const _StairNode({
     required this.nodeIndex,
     required this.center,
-    required this.familyId,
+    required this.objectId,
   });
 
   final int nodeIndex;
   final Offset center;
-  final String familyId;
+  final String objectId;
 }
 
 class _QueueEntry {
