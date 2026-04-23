@@ -14,6 +14,11 @@ import 'package:xml/xml.dart' as xml;
 class MapRoutingService {
   final Map<String, List<_RouteFloorData>> _campusCache =
       <String, List<_RouteFloorData>>{};
+  final Map<String, Future<List<_RouteFloorData>>> _campusLoadFutures =
+      <String, Future<List<_RouteFloorData>>>{};
+  final Map<String, _RouteGraph> _baseGraphCache = <String, _RouteGraph>{};
+  final Map<String, Future<_RouteGraph>> _baseGraphBuildFutures =
+      <String, Future<_RouteGraph>>{};
 
   Future<MapRouteResult> buildRoute({
     required MapRoomSearchEntry start,
@@ -35,7 +40,8 @@ class MapRoutingService {
       campusId: start.campus.id,
     );
     final List<_RouteFloorData> floors = await _loadCampusFloors(campus);
-    final _RouteGraph graph = _buildGraph(floors);
+    final _RouteGraph graph =
+        (await _baseGraphForCampus(campusId: campus.id, floors: floors)).copy();
     final int startNode = _addEndpointNode(
       graph: graph,
       floors: floors,
@@ -48,8 +54,6 @@ class MapRoutingService {
       entry: destination,
       label: 'конечной аудитории',
     );
-
-    _addStairNodes(graph: graph, floors: floors);
     final List<int> path = _findShortestPath(
       graph: graph,
       startNode: startNode,
@@ -64,6 +68,37 @@ class MapRoutingService {
       destination: destination,
       segments: _buildSegments(graph: graph, path: path, floors: floors),
     );
+  }
+
+  Future<void> preloadCampus({required CampusModel campus}) async {
+    final List<_RouteFloorData> floors = await _loadCampusFloors(campus);
+    await _baseGraphForCampus(campusId: campus.id, floors: floors);
+  }
+
+  Future<_RouteGraph> _baseGraphForCampus({
+    required String campusId,
+    required List<_RouteFloorData> floors,
+  }) {
+    final _RouteGraph? cachedGraph = _baseGraphCache[campusId];
+    if (cachedGraph != null) {
+      return Future<_RouteGraph>.value(cachedGraph);
+    }
+
+    final Future<_RouteGraph>? buildingGraph = _baseGraphBuildFutures[campusId];
+    if (buildingGraph != null) {
+      return buildingGraph;
+    }
+
+    final Future<_RouteGraph> graphFuture = Future<_RouteGraph>(() {
+      final _RouteGraph graph = _buildGraph(floors);
+      _addStairNodes(graph: graph, floors: floors);
+      _baseGraphCache[campusId] = graph;
+      return graph;
+    }).whenComplete(() {
+      _baseGraphBuildFutures.remove(campusId);
+    });
+    _baseGraphBuildFutures[campusId] = graphFuture;
+    return graphFuture;
   }
 
   CampusModel _findCampus({
@@ -85,6 +120,24 @@ class MapRoutingService {
       return cachedFloors;
     }
 
+    final Future<List<_RouteFloorData>>? loadingFloors =
+        _campusLoadFutures[campus.id];
+    if (loadingFloors != null) {
+      return loadingFloors;
+    }
+
+    final Future<List<_RouteFloorData>> floorsFuture = _loadCampusFloorsFresh(
+      campus,
+    ).whenComplete(() {
+      _campusLoadFutures.remove(campus.id);
+    });
+    _campusLoadFutures[campus.id] = floorsFuture;
+    return floorsFuture;
+  }
+
+  Future<List<_RouteFloorData>> _loadCampusFloorsFresh(
+    CampusModel campus,
+  ) async {
     final List<_RouteFloorData> floors = <_RouteFloorData>[];
     for (final FloorModel floor in campus.floors) {
       floors.add(await _parseFloor(floor));
@@ -126,6 +179,7 @@ class MapRoutingService {
 
     final Map<String, _RouteObject> rooms = <String, _RouteObject>{};
     final List<_RouteObject> stairs = <_RouteObject>[];
+    final List<_BlockedArea> blockedAreas = <_BlockedArea>[];
     for (final xml.XmlElement element
         in svgRoot.descendants.whereType<xml.XmlElement>()) {
       final String? dataObject = element.getAttribute('data-object');
@@ -154,10 +208,14 @@ class MapRoutingService {
         rooms[dataObject] = routeObject;
       } else if (type == _RouteObjectType.stairs) {
         stairs.add(routeObject);
+        blockedAreas.add(_BlockedArea(path: path, bounds: path.getBounds()));
       }
     }
 
-    final Set<_GridKey> walkableKeys = _buildWalkableKeys(walkableAreas);
+    final Set<_GridKey> walkableKeys = _buildWalkableKeys(
+      walkableAreas: walkableAreas,
+      blockedAreas: blockedAreas,
+    );
     if (walkableKeys.isEmpty) {
       throw StateError(
         'На этаже ${floor.number} корпуса В-78 не найден walkable-слой.',
@@ -167,6 +225,7 @@ class MapRoutingService {
     return _RouteFloorData(
       floor: floor,
       walkableAreas: walkableAreas,
+      blockedAreas: blockedAreas,
       walkableKeys: walkableKeys,
       rooms: rooms,
       stairs: stairs,
@@ -224,7 +283,10 @@ class MapRoutingService {
     return null;
   }
 
-  Set<_GridKey> _buildWalkableKeys(List<_WalkableArea> walkableAreas) {
+  Set<_GridKey> _buildWalkableKeys({
+    required List<_WalkableArea> walkableAreas,
+    required List<_BlockedArea> blockedAreas,
+  }) {
     final Set<_GridKey> keys = <_GridKey>{};
     for (final _WalkableArea area in walkableAreas) {
       final int left = (area.bounds.left / _gridStep).floor();
@@ -234,7 +296,13 @@ class MapRoutingService {
       for (int x = left; x <= right; x += 1) {
         for (int y = top; y <= bottom; y += 1) {
           final Offset point = _pointFromKey(_GridKey(x: x, y: y));
-          if (area.path.contains(point)) {
+          if (area.path.contains(point) &&
+              !_pointIsInsideBlockedAreas(
+                point: point,
+                blockedAreas: blockedAreas,
+                allowedStart: null,
+                allowedEnd: null,
+              )) {
             keys.add(_GridKey(x: x, y: y));
           }
         }
@@ -313,7 +381,6 @@ class MapRoutingService {
     final _RouteGraph graph = _RouteGraph();
     for (final _RouteFloorData floorData in floors) {
       final Map<_GridKey, int> floorNodes = <_GridKey, int>{};
-      final List<int> nodeIndexes = <int>[];
       for (final _GridKey key in floorData.walkableKeys) {
         final int nodeIndex = graph.addNode(
           _RouteNode(
@@ -324,10 +391,8 @@ class MapRoutingService {
           ),
         );
         floorNodes[key] = nodeIndex;
-        nodeIndexes.add(nodeIndex);
       }
       graph.gridNodesByFloor[floorData.floor.id] = floorNodes;
-      graph.nodeIndexesByFloor[floorData.floor.id] = nodeIndexes;
       _addWalkableComponentBridges(
         graph: graph,
         floorData: floorData,
@@ -362,8 +427,12 @@ class MapRoutingService {
         (_walkableComponentBridgeDistance / _gridStep).ceil();
     final double maxDistanceSquared =
         _walkableComponentBridgeDistance * _walkableComponentBridgeDistance;
+    final Set<_GridKey> bridgeCandidateKeys = _bridgeCandidateKeys(
+      components: components,
+      componentIndexes: componentIndexes,
+    );
 
-    for (final _GridKey sourceKey in floorData.walkableKeys) {
+    for (final _GridKey sourceKey in bridgeCandidateKeys) {
       final int? sourceComponentIndex = componentIndexes[sourceKey];
       final int? sourceNodeIndex = floorNodes[sourceKey];
       if (sourceComponentIndex == null || sourceNodeIndex == null) {
@@ -400,6 +469,9 @@ class MapRoutingService {
             start: sourcePoint,
             end: targetPoint,
             walkableAreas: floorData.walkableAreas,
+            blockedAreas: floorData.blockedAreas,
+            allowedStart: null,
+            allowedEnd: null,
           )) {
             continue;
           }
@@ -435,6 +507,48 @@ class MapRoutingService {
         weight: bridge.distance * _walkableComponentBridgeWeightMultiplier,
       );
     }
+  }
+
+  Set<_GridKey> _bridgeCandidateKeys({
+    required List<Set<_GridKey>> components,
+    required Map<_GridKey, int> componentIndexes,
+  }) {
+    final Set<_GridKey> keys = <_GridKey>{};
+    for (final Set<_GridKey> component in components) {
+      for (final _GridKey key in component) {
+        if (_isComponentBoundaryKey(
+          key: key,
+          componentIndex: componentIndexes[key],
+          componentIndexes: componentIndexes,
+        )) {
+          keys.add(key);
+        }
+      }
+    }
+
+    return keys;
+  }
+
+  bool _isComponentBoundaryKey({
+    required _GridKey key,
+    required int? componentIndex,
+    required Map<_GridKey, int> componentIndexes,
+  }) {
+    if (componentIndex == null) {
+      return false;
+    }
+
+    for (final _GridDirection direction in _gridDirections) {
+      final _GridKey neighbor = _GridKey(
+        x: key.x + direction.dx,
+        y: key.y + direction.dy,
+      );
+      if (componentIndexes[neighbor] != componentIndex) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   int _addEndpointNode({
@@ -518,7 +632,7 @@ class MapRoutingService {
           graph.addEdge(
             from: nodeIndex,
             to: gridNode.nodeIndex,
-            weight: gridNode.distance,
+            weight: gridNode.distance + _stairAccessWeight,
           );
         }
         stairNodes.add(
@@ -652,8 +766,13 @@ class MapRoutingService {
     required List<Offset> candidates,
     required double maxDistance,
   }) {
-    final List<int> nodeIndexes =
-        graph.nodeIndexesByFloor[floorData.floor.id] ?? <int>[];
+    final Map<_GridKey, int> floorGridNodes =
+        graph.gridNodesByFloor[floorData.floor.id] ?? <_GridKey, int>{};
+    final Set<int> nodeIndexes = _nearbyNodeIndexes(
+      floorGridNodes: floorGridNodes,
+      candidates: candidates,
+      maxDistance: maxDistance,
+    );
     final List<_GridNodeDistance> nearbyNodes = <_GridNodeDistance>[];
 
     for (final int nodeIndex in nodeIndexes) {
@@ -691,6 +810,38 @@ class MapRoutingService {
     return nearbyNodes
         .take(_maximumConnectionNodeCount)
         .toList(growable: false);
+  }
+
+  Set<int> _nearbyNodeIndexes({
+    required Map<_GridKey, int> floorGridNodes,
+    required List<Offset> candidates,
+    required double maxDistance,
+  }) {
+    final Set<int> nodeIndexes = <int>{};
+    final int maxGridOffset = (maxDistance / _gridStep).ceil();
+
+    for (final Offset candidate in candidates) {
+      final int centerX = (candidate.dx / _gridStep).round();
+      final int centerY = (candidate.dy / _gridStep).round();
+      for (int dx = -maxGridOffset; dx <= maxGridOffset; dx += 1) {
+        for (int dy = -maxGridOffset; dy <= maxGridOffset; dy += 1) {
+          final _GridKey key = _GridKey(x: centerX + dx, y: centerY + dy);
+          final int? nodeIndex = floorGridNodes[key];
+          if (nodeIndex == null) {
+            continue;
+          }
+
+          final Offset point = _pointFromKey(key);
+          if ((point - candidate).distance > maxDistance) {
+            continue;
+          }
+
+          nodeIndexes.add(nodeIndex);
+        }
+      }
+    }
+
+    return nodeIndexes;
   }
 
   List<Offset> _connectionCandidates(Rect bounds) {
@@ -889,6 +1040,7 @@ class MapRoutingService {
             start: points[anchorIndex],
             end: points[nextIndex],
             walkableKeys: floorData.walkableKeys,
+            blockedAreas: floorData.blockedAreas,
           )) {
         nextIndex -= 1;
       }
@@ -904,9 +1056,10 @@ class MapRoutingService {
     required Offset start,
     required Offset end,
     required Set<_GridKey> walkableKeys,
+    required List<_BlockedArea> blockedAreas,
   }) {
     final double distance = (end - start).distance;
-    if (distance <= _gridStep) {
+    if (distance == 0) {
       return true;
     }
 
@@ -914,6 +1067,14 @@ class MapRoutingService {
     for (int index = 1; index < steps; index += 1) {
       final double ratio = index / steps;
       final Offset point = Offset.lerp(start, end, ratio)!;
+      if (_pointIsInsideBlockedAreas(
+        point: point,
+        blockedAreas: blockedAreas,
+        allowedStart: start,
+        allowedEnd: end,
+      )) {
+        return false;
+      }
       if (!_pointIsWalkable(point: point, walkableKeys: walkableKeys)) {
         return false;
       }
@@ -926,12 +1087,23 @@ class MapRoutingService {
     required Offset start,
     required Offset end,
     required List<_WalkableArea> walkableAreas,
+    required List<_BlockedArea> blockedAreas,
+    required Offset? allowedStart,
+    required Offset? allowedEnd,
   }) {
     final double distance = (end - start).distance;
     final int steps = math.max(2, (distance / (_gridStep / 3)).ceil());
     for (int index = 0; index <= steps; index += 1) {
       final double ratio = index / steps;
       final Offset point = Offset.lerp(start, end, ratio)!;
+      if (_pointIsInsideBlockedAreas(
+        point: point,
+        blockedAreas: blockedAreas,
+        allowedStart: allowedStart,
+        allowedEnd: allowedEnd,
+      )) {
+        return false;
+      }
       if (!_pointIsInsideWalkableAreas(
         point: point,
         walkableAreas: walkableAreas,
@@ -957,6 +1129,52 @@ class MapRoutingService {
     }
 
     return false;
+  }
+
+  bool _pointIsInsideBlockedAreas({
+    required Offset point,
+    required List<_BlockedArea> blockedAreas,
+    required Offset? allowedStart,
+    required Offset? allowedEnd,
+  }) {
+    for (final _BlockedArea blockedArea in blockedAreas) {
+      if (!blockedArea.bounds.contains(point)) {
+        continue;
+      }
+      if (!blockedArea.path.contains(point)) {
+        continue;
+      }
+      if (_blockedAreaContainsAllowedPoint(
+        blockedArea: blockedArea,
+        allowedPoint: allowedStart,
+      )) {
+        continue;
+      }
+      if (_blockedAreaContainsAllowedPoint(
+        blockedArea: blockedArea,
+        allowedPoint: allowedEnd,
+      )) {
+        continue;
+      }
+
+      return true;
+    }
+
+    return false;
+  }
+
+  bool _blockedAreaContainsAllowedPoint({
+    required _BlockedArea blockedArea,
+    required Offset? allowedPoint,
+  }) {
+    if (allowedPoint == null) {
+      return false;
+    }
+    if (!blockedArea.bounds.contains(allowedPoint)) {
+      return false;
+    }
+
+    return blockedArea.path.contains(allowedPoint);
   }
 
   bool _pointIsWalkable({
@@ -1013,6 +1231,7 @@ class MapRoutingService {
   static const double _stairCoordinateMatchingTolerance = 80;
   static const double _roomConnectionMaxDistance = 360;
   static const double _stairConnectionMaxDistance = 240;
+  static const double _stairAccessWeight = 1200;
   static const double _floorTransferWeight = 420;
   static const double _walkableComponentBridgeDistance = 336;
   static const double _walkableComponentBridgeWeightMultiplier = 2;
@@ -1043,6 +1262,13 @@ class _WalkableArea {
   final Rect bounds;
 }
 
+class _BlockedArea {
+  const _BlockedArea({required this.path, required this.bounds});
+
+  final Path path;
+  final Rect bounds;
+}
+
 class _RouteObject {
   const _RouteObject({required this.dataObject, required this.bounds});
 
@@ -1054,6 +1280,7 @@ class _RouteFloorData {
   const _RouteFloorData({
     required this.floor,
     required this.walkableAreas,
+    required this.blockedAreas,
     required this.walkableKeys,
     required this.rooms,
     required this.stairs,
@@ -1061,6 +1288,7 @@ class _RouteFloorData {
 
   final FloorModel floor;
   final List<_WalkableArea> walkableAreas;
+  final List<_BlockedArea> blockedAreas;
   final Set<_GridKey> walkableKeys;
   final Map<String, _RouteObject> rooms;
   final List<_RouteObject> stairs;
@@ -1138,7 +1366,20 @@ class _RouteGraph {
   final Map<int, List<_RouteEdge>> edges = <int, List<_RouteEdge>>{};
   final Map<String, Map<_GridKey, int>> gridNodesByFloor =
       <String, Map<_GridKey, int>>{};
-  final Map<String, List<int>> nodeIndexesByFloor = <String, List<int>>{};
+
+  _RouteGraph copy() {
+    final _RouteGraph graph = _RouteGraph();
+    graph.nodes.addAll(nodes);
+    for (final MapEntry<int, List<_RouteEdge>> entry in edges.entries) {
+      graph.edges[entry.key] = List<_RouteEdge>.of(entry.value);
+    }
+    for (final MapEntry<String, Map<_GridKey, int>> entry
+        in gridNodesByFloor.entries) {
+      graph.gridNodesByFloor[entry.key] = Map<_GridKey, int>.of(entry.value);
+    }
+
+    return graph;
+  }
 
   int addNode(_RouteNode node) {
     nodes.add(node);

@@ -1,5 +1,7 @@
+import 'dart:math' as math;
 import 'dart:ui';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rtu_mirea_app/map/config/map_campuses.dart';
 import 'package:rtu_mirea_app/map/models/campus_model.dart';
@@ -110,6 +112,20 @@ void main() {
       expected: const Offset(4902.9, 4471.7),
       maxDistance: 140,
     );
+
+    final FloorModel floor1 = route.destination.campus.floors.firstWhere(
+      (FloorModel floor) => floor.id == 'v-78-floor1',
+    );
+    final List<Path> unusedNearbyStairs = <Path>[
+      await _pathByDataObjectSuffix(floor: floor1, suffix: '__s__2318:6543'),
+      await _pathByDataObjectSuffix(floor: floor1, suffix: '__s__2318:6544'),
+    ];
+    for (final Path unusedStair in unusedNearbyStairs) {
+      _expectSegmentAvoidsPath(
+        segment: floor1Segment,
+        blockedPath: unusedStair,
+      );
+    }
   });
 
   test('includes Cyberzone in local room search data', () async {
@@ -283,6 +299,49 @@ void _expectPointNear({
   required double maxDistance,
 }) {
   expect((point - expected).distance, lessThanOrEqualTo(maxDistance));
+}
+
+Future<Path> _pathByDataObjectSuffix({
+  required FloorModel floor,
+  required String suffix,
+}) async {
+  final String svgString = await rootBundle.loadString(floor.svgPath);
+  final xml.XmlDocument document = xml.XmlDocument.parse(svgString);
+  final xml.XmlElement svgRoot = document.findElements('svg').first;
+  final xml.XmlElement element = svgRoot.descendants
+      .whereType<xml.XmlElement>()
+      .firstWhere(
+        (xml.XmlElement element) =>
+            element.getAttribute('data-object')?.endsWith(suffix) ?? false,
+      );
+  final Path? path = SvgPathParser.parseElementToPath(
+    element: element,
+    elementsById: SvgPathParser.collectElementsById(svgRoot),
+  );
+
+  expect(path, isNotNull);
+  return path!;
+}
+
+void _expectSegmentAvoidsPath({
+  required MapRouteSegment segment,
+  required Path blockedPath,
+}) {
+  for (int index = 0; index < segment.points.length - 1; index += 1) {
+    final Offset start = segment.points[index];
+    final Offset end = segment.points[index + 1];
+    final double distance = (end - start).distance;
+    final int steps = math.max(2, (distance / 8).ceil());
+    for (int step = 1; step < steps; step += 1) {
+      final Offset point = Offset.lerp(start, end, step / steps)!;
+      expect(
+        blockedPath.contains(point),
+        isFalse,
+        reason:
+            'Route segment ${segment.floorNumber} crosses unused stair at $point',
+      );
+    }
+  }
 }
 
 String _objectIdFromDataObject(String dataObject) {
