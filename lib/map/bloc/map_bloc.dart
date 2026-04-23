@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:developer' as developer;
 import 'dart:ui';
 
 import 'package:bloc/bloc.dart';
@@ -55,7 +54,6 @@ class MapBloc extends Bloc<MapEvent, MapState> {
           boundingRect: floorData.$2,
         ),
       );
-      _preloadRoutingGraph(campus);
     } catch (error) {
       emit(MapError('Ошибка инициализации карты: $error'));
     }
@@ -79,7 +77,6 @@ class MapBloc extends Bloc<MapEvent, MapState> {
           boundingRect: floorData.$2,
         ),
       );
-      _preloadRoutingGraph(event.selectedCampus);
     } catch (error) {
       emit(MapError('Ошибка загрузки кампуса: $error'));
     }
@@ -356,25 +353,6 @@ class MapBloc extends Bloc<MapEvent, MapState> {
           ),
         )
         .toList(growable: false);
-  }
-
-  void _preloadRoutingGraph(CampusModel campus) {
-    if (campus.id != 'v-78') {
-      return;
-    }
-
-    unawaited(
-      Future<void>.delayed(const Duration(milliseconds: 250), () async {
-        await routingService.preloadCampus(campus: campus);
-      }).catchError((Object error, StackTrace stackTrace) {
-        developer.log(
-          'Ошибка предварительной сборки графа маршрутизации',
-          name: 'MapBloc',
-          error: error,
-          stackTrace: stackTrace,
-        );
-      }),
-    );
   }
 
   FloorModel _defaultFloorForCampus(CampusModel campus) {
