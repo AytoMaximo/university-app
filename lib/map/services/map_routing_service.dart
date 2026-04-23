@@ -1,4 +1,5 @@
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui';
 
@@ -15,10 +16,8 @@ import 'package:xml/xml.dart' as xml;
 class MapRoutingService {
   final Map<String, List<_RouteFloorData>> _campusCache =
       <String, List<_RouteFloorData>>{};
-  final Map<String, Future<List<_RouteFloorData>>> _campusLoadFutures =
-      <String, Future<List<_RouteFloorData>>>{};
-  final Map<String, _RouteGraph> _baseGraphCache = <String, _RouteGraph>{};
-  final Map<String, Future<_RouteGraph>> _baseGraphBuildFutures =
+  final Map<String, _RouteGraph> _prebuiltGraphCache = <String, _RouteGraph>{};
+  final Map<String, Future<_RouteGraph>> _prebuiltGraphLoadFutures =
       <String, Future<_RouteGraph>>{};
 
   Future<MapRouteResult> buildRoute({
@@ -40,18 +39,14 @@ class MapRoutingService {
       availableCampuses: availableCampuses,
       campusId: start.campus.id,
     );
-    final List<_RouteFloorData> floors = await _loadCampusFloors(campus);
-    final _RouteGraph graph =
-        (await _baseGraphForCampus(campusId: campus.id, floors: floors)).copy();
-    final int startNode = _addEndpointNode(
+    final _RouteGraph graph = await _loadPrebuiltGraph(campusId: campus.id);
+    final int startNode = _routeTargetNodeIndex(
       graph: graph,
-      floors: floors,
       entry: start,
       label: 'начального объекта',
     );
-    final int destinationNode = _addEndpointNode(
+    final int destinationNode = _routeTargetNodeIndex(
       graph: graph,
-      floors: floors,
       entry: destination,
       label: 'конечного объекта',
     );
@@ -67,39 +62,65 @@ class MapRoutingService {
     return MapRouteResult(
       start: start,
       destination: destination,
-      segments: _buildSegments(graph: graph, path: path, floors: floors),
+      segments: _buildSegments(graph: graph, path: path),
     );
   }
 
   Future<void> preloadCampus({required CampusModel campus}) async {
-    final List<_RouteFloorData> floors = await _loadCampusFloors(campus);
-    await _baseGraphForCampus(campusId: campus.id, floors: floors);
+    await _loadPrebuiltGraph(campusId: campus.id);
   }
 
-  Future<_RouteGraph> _baseGraphForCampus({
-    required String campusId,
-    required List<_RouteFloorData> floors,
-  }) {
-    final _RouteGraph? cachedGraph = _baseGraphCache[campusId];
+  static Future<String> buildCampusGraphAssetJson({
+    required CampusModel campus,
+  }) async {
+    final MapRoutingService builder = MapRoutingService();
+    final List<_RouteFloorData> floors = await builder._loadCampusFloors(
+      campus,
+    );
+    final _RouteGraph graph = builder._buildGraph(floors);
+    builder._addStairNodes(graph: graph, floors: floors);
+    builder._addRouteTargetNodes(graph: graph, floors: floors, campus: campus);
+    builder._materializeGraphEdges(graph: graph);
+    return jsonEncode(
+      builder._serializePrebuiltGraph(campusId: campus.id, graph: graph),
+    );
+  }
+
+  Future<_RouteGraph> _loadPrebuiltGraph({required String campusId}) {
+    final _RouteGraph? cachedGraph = _prebuiltGraphCache[campusId];
     if (cachedGraph != null) {
       return Future<_RouteGraph>.value(cachedGraph);
     }
 
-    final Future<_RouteGraph>? buildingGraph = _baseGraphBuildFutures[campusId];
-    if (buildingGraph != null) {
-      return buildingGraph;
+    final Future<_RouteGraph>? loadingGraph =
+        _prebuiltGraphLoadFutures[campusId];
+    if (loadingGraph != null) {
+      return loadingGraph;
     }
 
-    final Future<_RouteGraph> graphFuture = Future<_RouteGraph>(() {
-      final _RouteGraph graph = _buildGraph(floors);
-      _addStairNodes(graph: graph, floors: floors);
-      _baseGraphCache[campusId] = graph;
-      return graph;
-    }).whenComplete(() {
-      _baseGraphBuildFutures.remove(campusId);
-    });
-    _baseGraphBuildFutures[campusId] = graphFuture;
+    final Future<_RouteGraph> graphFuture = rootBundle
+        .loadString(_prebuiltGraphAssetPath(campusId))
+        .then(_deserializePrebuiltGraph)
+        .then(((_RouteGraph graph) {
+          _prebuiltGraphCache[campusId] = graph;
+          return graph;
+        }))
+        .whenComplete(() {
+          _prebuiltGraphLoadFutures.remove(campusId);
+        });
+    _prebuiltGraphLoadFutures[campusId] = graphFuture;
     return graphFuture;
+  }
+
+  String _prebuiltGraphAssetPath(String campusId) {
+    final String? assetPath = _prebuiltGraphAssetPaths[campusId];
+    if (assetPath == null) {
+      throw UnsupportedError(
+        'Предзапеченный граф маршрутизации не настроен для корпуса $campusId.',
+      );
+    }
+
+    return assetPath;
   }
 
   CampusModel _findCampus({
@@ -121,19 +142,7 @@ class MapRoutingService {
       return cachedFloors;
     }
 
-    final Future<List<_RouteFloorData>>? loadingFloors =
-        _campusLoadFutures[campus.id];
-    if (loadingFloors != null) {
-      return loadingFloors;
-    }
-
-    final Future<List<_RouteFloorData>> floorsFuture = _loadCampusFloorsFresh(
-      campus,
-    ).whenComplete(() {
-      _campusLoadFutures.remove(campus.id);
-    });
-    _campusLoadFutures[campus.id] = floorsFuture;
-    return floorsFuture;
+    return _loadCampusFloorsFresh(campus);
   }
 
   Future<List<_RouteFloorData>> _loadCampusFloorsFresh(
@@ -744,6 +753,17 @@ class MapRoutingService {
       maxDistance: _roomConnectionMaxDistance,
     );
     for (final _GridNodeDistance gridNode in nearbyGridNodes) {
+      final Offset gridPoint = graph.nodes[gridNode.nodeIndex].point;
+      if (!_endpointConnectionIsWalkable(
+        start: routeTarget.bounds.center,
+        end: gridPoint,
+        allowedBounds: routeTarget.bounds,
+        walkableAreas: floorData.walkableAreas,
+        blockedAreas: floorData.blockedAreas,
+      )) {
+        continue;
+      }
+
       graph.addEdge(
         from: nodeIndex,
         to: gridNode.nodeIndex,
@@ -752,6 +772,60 @@ class MapRoutingService {
     }
 
     return nodeIndex;
+  }
+
+  int _routeTargetNodeIndex({
+    required _RouteGraph graph,
+    required MapRoomSearchEntry entry,
+    required String label,
+  }) {
+    final int? nodeIndex = graph.routeTargetNodeIndexes[entry.roomId];
+    if (nodeIndex != null) {
+      return nodeIndex;
+    }
+
+    throw StateError(
+      'РљРѕРЅС‚СѓСЂ $label ${entry.name} РЅРµ РЅР°Р№РґРµРЅ РЅР° РєР°СЂС‚Рµ.',
+    );
+  }
+
+  MapObjectType _routeTargetObjectType(String dataObject) {
+    if (dataObject.contains('__c__')) {
+      return MapObjectType.canteen;
+    }
+    if (dataObject.contains('__t__')) {
+      return MapObjectType.toilet;
+    }
+    if (dataObject.contains('__e__')) {
+      return MapObjectType.entranceExit;
+    }
+
+    return MapObjectType.room;
+  }
+
+  void _addRouteTargetNodes({
+    required _RouteGraph graph,
+    required List<_RouteFloorData> floors,
+    required CampusModel campus,
+  }) {
+    for (final _RouteFloorData floorData in floors) {
+      for (final MapEntry<String, _RouteObject> entry
+          in floorData.routeTargets.entries) {
+        final int nodeIndex = _addEndpointNode(
+          graph: graph,
+          floors: floors,
+          entry: MapRoomSearchEntry(
+            roomId: entry.key,
+            name: entry.key,
+            objectType: _routeTargetObjectType(entry.key),
+            campus: campus,
+            floor: floorData.floor,
+          ),
+          label: 'РѕР±СЉРµРєС‚Р° РјР°СЂС€СЂСѓС‚РёР·Р°С†РёРё',
+        );
+        graph.routeTargetNodeIndexes[entry.key] = nodeIndex;
+      }
+    }
   }
 
   _RouteFloorData _findFloorData({
@@ -1035,6 +1109,10 @@ class MapRoutingService {
     required int startNode,
     required int destinationNode,
   }) {
+    final Set<int> nonTransitRouteTargetNodes =
+        graph.routeTargetNodeIndexes.values.toSet()
+          ..remove(startNode)
+          ..remove(destinationNode);
     final List<double> distances = List<double>.filled(
       graph.nodes.length,
       double.infinity,
@@ -1056,6 +1134,9 @@ class MapRoutingService {
       }
       if (current.nodeIndex == destinationNode) {
         break;
+      }
+      if (nonTransitRouteTargetNodes.contains(current.nodeIndex)) {
+        continue;
       }
 
       for (final _RouteEdge edge in _edgesForNode(
@@ -1085,6 +1166,122 @@ class MapRoutingService {
     }
 
     return path.reversed.toList(growable: false);
+  }
+
+  void _materializeGraphEdges({required _RouteGraph graph}) {
+    for (int nodeIndex = 0; nodeIndex < graph.nodes.length; nodeIndex += 1) {
+      graph.edges[nodeIndex] = _edgesForNode(
+        graph: graph,
+        nodeIndex: nodeIndex,
+      ).toList(growable: false);
+    }
+    graph.gridEdges.clear();
+    graph.gridNodesByFloor.clear();
+    graph.floorDataById.clear();
+  }
+
+  Map<String, dynamic> _serializePrebuiltGraph({
+    required String campusId,
+    required _RouteGraph graph,
+  }) {
+    final Map<String, int> floorIndexes = <String, int>{};
+    final List<List<Object>> floors = <List<Object>>[];
+    for (final _RouteNode node in graph.nodes) {
+      if (floorIndexes.containsKey(node.floorId)) {
+        continue;
+      }
+
+      floorIndexes[node.floorId] = floors.length;
+      floors.add(<Object>[node.floorId, node.floorNumber]);
+    }
+
+    final List<List<Object>> nodes = graph.nodes
+        .map(((_RouteNode node) {
+          final int floorIndex = floorIndexes[node.floorId]!;
+          return <Object>[floorIndex, node.point.dx, node.point.dy];
+        }))
+        .toList(growable: false);
+    final List<List<List<Object>>> edges = List<List<List<Object>>>.generate(
+      graph.nodes.length,
+      (int nodeIndex) {
+        final List<_RouteEdge> nodeEdges =
+            graph.edges[nodeIndex] ?? const <_RouteEdge>[];
+        return nodeEdges
+            .map(((_RouteEdge edge) => <Object>[edge.to, edge.weight]))
+            .toList(growable: false);
+      },
+      growable: false,
+    );
+
+    return <String, dynamic>{
+      'version': 1,
+      'campusId': campusId,
+      'floors': floors,
+      'nodes': nodes,
+      'edges': edges,
+      'routeTargets': graph.routeTargetNodeIndexes,
+    };
+  }
+
+  _RouteGraph _deserializePrebuiltGraph(String jsonString) {
+    final Map<String, dynamic> json =
+        jsonDecode(jsonString) as Map<String, dynamic>;
+    final List<dynamic> floorsJson = json['floors'] as List<dynamic>;
+    final List<_SerializedFloor> floors = floorsJson
+        .map((_parseSerializedFloor))
+        .toList(growable: false);
+    final List<dynamic> nodesJson = json['nodes'] as List<dynamic>;
+    final List<dynamic> edgesJson = json['edges'] as List<dynamic>;
+    final Map<String, dynamic> routeTargetsJson =
+        json['routeTargets'] as Map<String, dynamic>;
+
+    final _RouteGraph graph = _RouteGraph();
+    for (final dynamic nodeJson in nodesJson) {
+      final List<dynamic> nodeData = nodeJson as List<dynamic>;
+      final _SerializedFloor floor = floors[nodeData[0] as int];
+      graph.addNode(
+        _RouteNode(
+          floorId: floor.floorId,
+          floorNumber: floor.floorNumber,
+          point: Offset(
+            (nodeData[1] as num).toDouble(),
+            (nodeData[2] as num).toDouble(),
+          ),
+          gridKey: null,
+        ),
+      );
+    }
+
+    for (int nodeIndex = 0; nodeIndex < edgesJson.length; nodeIndex += 1) {
+      final List<dynamic> nodeEdgesJson = edgesJson[nodeIndex] as List<dynamic>;
+      graph.edges[nodeIndex] = nodeEdgesJson
+          .map((_parseSerializedEdge))
+          .toList(growable: false);
+    }
+    graph.routeTargetNodeIndexes.addAll(
+      routeTargetsJson.map(
+        ((String key, dynamic value) =>
+            MapEntry<String, int>(key, value as int)),
+      ),
+    );
+
+    return graph;
+  }
+
+  _SerializedFloor _parseSerializedFloor(dynamic floorJson) {
+    final List<dynamic> floorData = floorJson as List<dynamic>;
+    return _SerializedFloor(
+      floorId: floorData[0] as String,
+      floorNumber: floorData[1] as int,
+    );
+  }
+
+  _RouteEdge _parseSerializedEdge(dynamic edgeJson) {
+    final List<dynamic> edgeData = edgeJson as List<dynamic>;
+    return _RouteEdge(
+      to: edgeData[0] as int,
+      weight: (edgeData[1] as num).toDouble(),
+    );
   }
 
   Iterable<_RouteEdge> _edgesForNode({
@@ -1150,14 +1347,8 @@ class MapRoutingService {
   List<MapRouteSegment> _buildSegments({
     required _RouteGraph graph,
     required List<int> path,
-    required List<_RouteFloorData> floors,
   }) {
     final List<MapRouteSegment> segments = <MapRouteSegment>[];
-    final Map<String, _RouteFloorData> floorDataById =
-        <String, _RouteFloorData>{
-          for (final _RouteFloorData floorData in floors)
-            floorData.floor.id: floorData,
-        };
     String? currentFloorId;
     int? currentFloorNumber;
     List<Offset> currentPoints = <Offset>[];
@@ -1171,7 +1362,9 @@ class MapRoutingService {
           floorNumber: currentFloorNumber,
           points: currentPoints,
           floorData:
-              currentFloorId == null ? null : floorDataById[currentFloorId],
+              currentFloorId == null
+                  ? null
+                  : graph.floorDataById[currentFloorId],
         );
         currentFloorId = node.floorId;
         currentFloorNumber = node.floorNumber;
@@ -1189,7 +1382,8 @@ class MapRoutingService {
       floorId: currentFloorId,
       floorNumber: currentFloorNumber,
       points: currentPoints,
-      floorData: currentFloorId == null ? null : floorDataById[currentFloorId],
+      floorData:
+          currentFloorId == null ? null : graph.floorDataById[currentFloorId],
     );
 
     return segments;
@@ -1377,6 +1571,35 @@ class MapRoutingService {
       allowedStart: allowedStart,
       allowedEnd: allowedEnd,
     );
+  }
+
+  bool _endpointConnectionIsWalkable({
+    required Offset start,
+    required Offset end,
+    required Rect allowedBounds,
+    required List<_WalkableArea> walkableAreas,
+    required List<_BlockedArea> blockedAreas,
+  }) {
+    final double distance = (end - start).distance;
+    final int steps = math.max(2, (distance / (_gridStep / 3)).ceil());
+    for (int index = 1; index <= steps; index += 1) {
+      final double ratio = index / steps;
+      final Offset point = Offset.lerp(start, end, ratio)!;
+      if (allowedBounds.contains(point)) {
+        continue;
+      }
+      if (!_pointHasRouteClearance(
+        point: point,
+        walkableAreas: walkableAreas,
+        blockedAreas: blockedAreas,
+        allowedStart: start,
+        allowedEnd: end,
+      )) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   bool _pointIsInsideBlockedAreas({
@@ -1589,6 +1812,9 @@ class MapRoutingService {
     '2318:6530|2318:5360',
     '2318:4486|2318:4298',
   };
+  static const Map<String, String> _prebuiltGraphAssetPaths = <String, String>{
+    'v-78': 'assets/map_routing/v-78.json',
+  };
   static final List<_GridDirection> _gridDirections = <_GridDirection>[
     _GridDirection(dx: -1, dy: -1, weight: math.sqrt2),
     _GridDirection(dx: 0, dy: -1, weight: 1),
@@ -1726,6 +1952,7 @@ class _RouteGraph {
       <String, Map<_GridKey, int>>{};
   final Map<String, _RouteFloorData> floorDataById =
       <String, _RouteFloorData>{};
+  final Map<String, int> routeTargetNodeIndexes = <String, int>{};
 
   _RouteGraph copy() {
     final _RouteGraph graph = _RouteGraph._copyWithSharedGridEdges(
@@ -1740,6 +1967,7 @@ class _RouteGraph {
       graph.gridNodesByFloor[entry.key] = Map<_GridKey, int>.of(entry.value);
     }
     graph.floorDataById.addAll(floorDataById);
+    graph.routeTargetNodeIndexes.addAll(routeTargetNodeIndexes);
 
     return graph;
   }
@@ -1757,6 +1985,13 @@ class _RouteGraph {
         .putIfAbsent(to, () => <_RouteEdge>[])
         .add(_RouteEdge(to: from, weight: weight));
   }
+}
+
+class _SerializedFloor {
+  const _SerializedFloor({required this.floorId, required this.floorNumber});
+
+  final String floorId;
+  final int floorNumber;
 }
 
 class _StairNode {
