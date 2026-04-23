@@ -458,8 +458,9 @@ class MapRoutingService {
         for (int y = top; y <= bottom; y += 1) {
           final Offset point = _pointFromKey(_GridKey(x: x, y: y));
           if (area.path.contains(point) &&
-              !_pointIsInsideBlockedAreas(
+              _pointHasRouteClearance(
                 point: point,
+                walkableAreas: walkableAreas,
                 blockedAreas: blockedAreas,
                 allowedStart: null,
                 allowedEnd: null,
@@ -542,6 +543,7 @@ class MapRoutingService {
     final _RouteGraph graph = _RouteGraph();
     for (final _RouteFloorData floorData in floors) {
       final Map<_GridKey, int> floorNodes = <_GridKey, int>{};
+      graph.floorDataById[floorData.floor.id] = floorData;
       for (final _GridKey key in floorData.walkableKeys) {
         final int nodeIndex = graph.addNode(
           _RouteNode(
@@ -1100,12 +1102,23 @@ class MapRoutingService {
       return;
     }
 
+    final List<_RouteEdge>? cachedGridEdges = graph.gridEdges[nodeIndex];
+    if (cachedGridEdges != null) {
+      yield* cachedGridEdges;
+      return;
+    }
+
     final Map<_GridKey, int>? floorGridNodes =
         graph.gridNodesByFloor[node.floorId];
     if (floorGridNodes == null) {
       return;
     }
+    final _RouteFloorData? floorData = graph.floorDataById[node.floorId];
+    if (floorData == null) {
+      return;
+    }
 
+    final List<_RouteEdge> gridEdges = <_RouteEdge>[];
     for (final _GridDirection direction in _gridDirections) {
       final _GridKey neighborKey = _GridKey(
         x: key.x + direction.dx,
@@ -1115,9 +1128,23 @@ class MapRoutingService {
       if (neighborIndex == null) {
         continue;
       }
+      final Offset neighborPoint = graph.nodes[neighborIndex].point;
+      if (!_lineIsWalkable(
+        start: node.point,
+        end: neighborPoint,
+        walkableAreas: floorData.walkableAreas,
+        walkableKeys: floorData.walkableKeys,
+        blockedAreas: floorData.blockedAreas,
+      )) {
+        continue;
+      }
 
-      yield _RouteEdge(to: neighborIndex, weight: direction.weight * _gridStep);
+      gridEdges.add(
+        _RouteEdge(to: neighborIndex, weight: direction.weight * _gridStep),
+      );
     }
+    graph.gridEdges[nodeIndex] = gridEdges;
+    yield* gridEdges;
   }
 
   List<MapRouteSegment> _buildSegments({
@@ -1209,6 +1236,7 @@ class MapRoutingService {
           !_lineIsWalkable(
             start: points[anchorIndex],
             end: points[nextIndex],
+            walkableAreas: floorData.walkableAreas,
             walkableKeys: floorData.walkableKeys,
             blockedAreas: floorData.blockedAreas,
           )) {
@@ -1225,6 +1253,7 @@ class MapRoutingService {
   bool _lineIsWalkable({
     required Offset start,
     required Offset end,
+    required List<_WalkableArea> walkableAreas,
     required Set<_GridKey> walkableKeys,
     required List<_BlockedArea> blockedAreas,
   }) {
@@ -1237,8 +1266,9 @@ class MapRoutingService {
     for (int index = 1; index < steps; index += 1) {
       final double ratio = index / steps;
       final Offset point = Offset.lerp(start, end, ratio)!;
-      if (_pointIsInsideBlockedAreas(
+      if (!_pointHasRouteClearance(
         point: point,
+        walkableAreas: walkableAreas,
         blockedAreas: blockedAreas,
         allowedStart: start,
         allowedEnd: end,
@@ -1266,17 +1296,12 @@ class MapRoutingService {
     for (int index = 0; index <= steps; index += 1) {
       final double ratio = index / steps;
       final Offset point = Offset.lerp(start, end, ratio)!;
-      if (_pointIsInsideBlockedAreas(
+      if (!_pointHasRouteClearance(
         point: point,
+        walkableAreas: walkableAreas,
         blockedAreas: blockedAreas,
         allowedStart: allowedStart,
         allowedEnd: allowedEnd,
-      )) {
-        return false;
-      }
-      if (!_pointIsInsideWalkableAreas(
-        point: point,
-        walkableAreas: walkableAreas,
       )) {
         return false;
       }
@@ -1299,6 +1324,59 @@ class MapRoutingService {
     }
 
     return false;
+  }
+
+  bool _pointHasRouteClearance({
+    required Offset point,
+    required List<_WalkableArea> walkableAreas,
+    required List<_BlockedArea> blockedAreas,
+    required Offset? allowedStart,
+    required Offset? allowedEnd,
+  }) {
+    if (!_pointCanContainPedestrian(
+      point: point,
+      walkableAreas: walkableAreas,
+      blockedAreas: blockedAreas,
+      allowedStart: allowedStart,
+      allowedEnd: allowedEnd,
+    )) {
+      return false;
+    }
+
+    for (final Offset clearanceOffset in _pedestrianClearanceOffsets) {
+      if (_pointIsInsideBlockedAreas(
+        point: point + clearanceOffset,
+        blockedAreas: blockedAreas,
+        allowedStart: allowedStart,
+        allowedEnd: allowedEnd,
+      )) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  bool _pointCanContainPedestrian({
+    required Offset point,
+    required List<_WalkableArea> walkableAreas,
+    required List<_BlockedArea> blockedAreas,
+    required Offset? allowedStart,
+    required Offset? allowedEnd,
+  }) {
+    if (!_pointIsInsideWalkableAreas(
+      point: point,
+      walkableAreas: walkableAreas,
+    )) {
+      return false;
+    }
+
+    return !_pointIsInsideBlockedAreas(
+      point: point,
+      blockedAreas: blockedAreas,
+      allowedStart: allowedStart,
+      allowedEnd: allowedEnd,
+    );
   }
 
   bool _pointIsInsideBlockedAreas({
@@ -1493,8 +1571,20 @@ class MapRoutingService {
   static const double _floorTransferWeight = 420;
   static const double _walkableComponentBridgeDistance = 336;
   static const double _walkableComponentBridgeWeightMultiplier = 2;
+  static const double _pedestrianClearanceRadius = 16;
+  static const double _pedestrianDiagonalClearance = 11.313708498984761;
   static const int _minimumWalkableComponentSize = 4;
   static const int _maximumConnectionNodeCount = 12;
+  static const List<Offset> _pedestrianClearanceOffsets = <Offset>[
+    Offset(_pedestrianClearanceRadius, 0),
+    Offset(-_pedestrianClearanceRadius, 0),
+    Offset(0, _pedestrianClearanceRadius),
+    Offset(0, -_pedestrianClearanceRadius),
+    Offset(_pedestrianDiagonalClearance, _pedestrianDiagonalClearance),
+    Offset(-_pedestrianDiagonalClearance, _pedestrianDiagonalClearance),
+    Offset(_pedestrianDiagonalClearance, -_pedestrianDiagonalClearance),
+    Offset(-_pedestrianDiagonalClearance, -_pedestrianDiagonalClearance),
+  ];
   static final Set<String> _manualStairLinkIds = <String>{
     '2318:6530|2318:5360',
     '2318:4486|2318:4298',
@@ -1625,13 +1715,22 @@ class _ComponentBridge {
 }
 
 class _RouteGraph {
+  _RouteGraph() : gridEdges = <int, List<_RouteEdge>>{};
+
+  _RouteGraph._copyWithSharedGridEdges({required this.gridEdges});
+
   final List<_RouteNode> nodes = <_RouteNode>[];
   final Map<int, List<_RouteEdge>> edges = <int, List<_RouteEdge>>{};
+  final Map<int, List<_RouteEdge>> gridEdges;
   final Map<String, Map<_GridKey, int>> gridNodesByFloor =
       <String, Map<_GridKey, int>>{};
+  final Map<String, _RouteFloorData> floorDataById =
+      <String, _RouteFloorData>{};
 
   _RouteGraph copy() {
-    final _RouteGraph graph = _RouteGraph();
+    final _RouteGraph graph = _RouteGraph._copyWithSharedGridEdges(
+      gridEdges: gridEdges,
+    );
     graph.nodes.addAll(nodes);
     for (final MapEntry<int, List<_RouteEdge>> entry in edges.entries) {
       graph.edges[entry.key] = List<_RouteEdge>.of(entry.value);
@@ -1640,6 +1739,7 @@ class _RouteGraph {
         in gridNodesByFloor.entries) {
       graph.gridNodesByFloor[entry.key] = Map<_GridKey, int>.of(entry.value);
     }
+    graph.floorDataById.addAll(floorDataById);
 
     return graph;
   }

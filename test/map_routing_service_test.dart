@@ -821,6 +821,16 @@ void _expectSegmentAvoidsPath({
         reason:
             'Route segment ${segment.floorNumber} crosses blocker at $point',
       );
+      for (final Offset clearanceOffset in _testPedestrianClearanceOffsets) {
+        final Offset clearancePoint = point + clearanceOffset;
+        expect(
+          blockedPath.contains(clearancePoint),
+          isFalse,
+          reason:
+              'Route segment ${segment.floorNumber} has no pedestrian '
+              'clearance near blocker at $clearancePoint',
+        );
+      }
     }
   }
 }
@@ -851,3 +861,16 @@ MapObjectType? _routeableTypeFromDataObject({
     _objectIdFromDataObject(dataObject),
   );
 }
+
+const double _testPedestrianClearanceRadius = 16;
+const double _testPedestrianDiagonalClearance = 11.313708498984761;
+const List<Offset> _testPedestrianClearanceOffsets = <Offset>[
+  Offset(_testPedestrianClearanceRadius, 0),
+  Offset(-_testPedestrianClearanceRadius, 0),
+  Offset(0, _testPedestrianClearanceRadius),
+  Offset(0, -_testPedestrianClearanceRadius),
+  Offset(_testPedestrianDiagonalClearance, _testPedestrianDiagonalClearance),
+  Offset(-_testPedestrianDiagonalClearance, _testPedestrianDiagonalClearance),
+  Offset(_testPedestrianDiagonalClearance, -_testPedestrianDiagonalClearance),
+  Offset(-_testPedestrianDiagonalClearance, -_testPedestrianDiagonalClearance),
+];
