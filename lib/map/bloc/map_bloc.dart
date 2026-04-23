@@ -162,7 +162,7 @@ class MapBloc extends Bloc<MapEvent, MapState> {
         ),
       );
     } catch (error) {
-      emit(MapError('Ошибка поиска аудитории: $error'));
+      emit(MapError('Ошибка поиска объекта: $error'));
     }
   }
 
@@ -227,7 +227,7 @@ class MapBloc extends Bloc<MapEvent, MapState> {
           state is MapLoaded ? state as MapLoaded : currentState;
       emit(
         loadedState.copyWith(
-          routeState: routeState.withError('Выберите разные аудитории.'),
+          routeState: routeState.withError('Выберите разные объекты.'),
         ),
       );
       return;
@@ -306,8 +306,10 @@ class MapBloc extends Bloc<MapEvent, MapState> {
       for (final FloorModel floor in campus.floors) {
         final (List<RoomModel>, Rect) floorData = await _parseFloor(floor);
         for (final RoomModel room in floorData.$1) {
-          if (room.name.isEmpty ||
-              !objectsService.isRoom(_objectIdFromDataObject(room.roomId))) {
+          final MapObjectType? objectType = _routeableTypeFromDataObject(
+            room.roomId,
+          );
+          if (room.name.isEmpty || objectType == null) {
             continue;
           }
 
@@ -315,6 +317,7 @@ class MapBloc extends Bloc<MapEvent, MapState> {
             MapRoomSearchEntry(
               roomId: room.roomId,
               name: room.name,
+              objectType: objectType,
               campus: campus,
               floor: floor,
             ),
@@ -386,12 +389,25 @@ class MapBloc extends Bloc<MapEvent, MapState> {
 
   String _objectIdFromDataObject(String dataObject) {
     final RegExpMatch? match = RegExp(
-      r'__(?:r|c|s|t)__([^_]+)$',
+      r'__(?:r|c|s|t|e)__([^_]+)$',
     ).firstMatch(dataObject);
     if (match == null) {
       return '';
     }
 
     return match.group(1)!;
+  }
+
+  MapObjectType? _routeableTypeFromDataObject(String dataObject) {
+    final MapObjectType? syntheticType = syntheticMapObjectTypeFromDataObject(
+      dataObject,
+    );
+    if (syntheticType != null) {
+      return syntheticType;
+    }
+
+    return objectsService.getRouteableTypeById(
+      _objectIdFromDataObject(dataObject),
+    );
   }
 }

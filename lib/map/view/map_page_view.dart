@@ -584,12 +584,16 @@ class _MapPageViewState extends State<MapPageView> {
     }
 
     for (final RoomModel room in state.rooms) {
+      final MapObjectType? objectType = _routeableObjectTypeFromDataObject(
+        room.roomId,
+      );
       if (room.roomId == selectedRoomId &&
-          room.roomId.contains('__r__') &&
+          objectType != null &&
           room.name.isNotEmpty) {
         return MapRoomSearchEntry(
           roomId: room.roomId,
           name: room.name,
+          objectType: objectType,
           campus: state.selectedCampus,
           floor: state.selectedFloor,
         );
@@ -678,7 +682,7 @@ class _MapRoomSearchPanel extends StatelessWidget {
               decoration: InputDecoration(
                 isCollapsed: true,
                 contentPadding: EdgeInsets.zero,
-                hintText: 'Найти аудиторию',
+                hintText: 'Найти объект',
                 hintStyle: searchHintStyle,
                 prefixIcon: const Icon(Icons.search),
                 prefixIconConstraints: const BoxConstraints.tightFor(
@@ -714,7 +718,7 @@ class _MapRoomSearchPanel extends StatelessWidget {
                         child: Align(
                           alignment: Alignment.centerLeft,
                           child: Text(
-                            'Аудитория не найдена',
+                            'Объект не найден',
                             style: Theme.of(context).textTheme.bodyMedium
                                 ?.copyWith(color: colors.deactive),
                           ),
@@ -930,7 +934,7 @@ class _RouteSearchResults extends StatelessWidget {
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      'Аудитория не найдена',
+                      'Объект не найден',
                       style: Theme.of(
                         context,
                       ).textTheme.bodyMedium?.copyWith(color: colors.deactive),
@@ -1021,7 +1025,7 @@ class _SelectedRoomPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final AppColors colors = Theme.of(context).extension<AppColors>()!;
     final MapRoomSearchEntry? routeEntry = selectedRoomEntry;
-    final String titlePrefix = routeEntry == null ? 'Объект' : 'Аудитория';
+    final String titlePrefix = _selectedRoomTitlePrefix(routeEntry);
 
     return Material(
       color: colors.background02,
@@ -1075,7 +1079,8 @@ class _SelectedRoomPanel extends StatelessWidget {
               ),
             ],
             _RouteStatus(routeState: routeState, onClearRoute: onClearRoute),
-            selectedRoomActionBuilder(context, roomName),
+            if (routeEntry?.objectType == MapObjectType.room)
+              selectedRoomActionBuilder(context, roomName),
           ],
         ),
       ),
@@ -1220,6 +1225,35 @@ String _routeEntryTitle(MapRoomSearchEntry entry) {
   }
 
   return entry.roomId;
+}
+
+String _selectedRoomTitlePrefix(MapRoomSearchEntry? entry) {
+  if (entry?.objectType == MapObjectType.room) {
+    return 'Аудитория';
+  }
+
+  return 'Объект';
+}
+
+MapObjectType? _routeableObjectTypeFromDataObject(String dataObject) {
+  final MapObjectType? syntheticType = syntheticMapObjectTypeFromDataObject(
+    dataObject,
+  );
+  if (syntheticType != null) {
+    return syntheticType;
+  }
+
+  if (dataObject.contains('__r__')) {
+    return MapObjectType.room;
+  }
+  if (dataObject.contains('__c__')) {
+    return MapObjectType.canteen;
+  }
+  if (dataObject.contains('__t__')) {
+    return MapObjectType.toilet;
+  }
+
+  return null;
 }
 
 String _formatFloor(int floor) {

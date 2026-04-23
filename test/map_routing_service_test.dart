@@ -12,6 +12,7 @@ import 'package:rtu_mirea_app/map/models/map_route_segment.dart';
 import 'package:rtu_mirea_app/map/models/room_model.dart';
 import 'package:rtu_mirea_app/map/services/map_room_hit_test_service.dart';
 import 'package:rtu_mirea_app/map/services/map_routing_service.dart';
+import 'package:rtu_mirea_app/map/services/map_synthetic_object_service.dart';
 import 'package:rtu_mirea_app/map/services/objects_service.dart';
 import 'package:rtu_mirea_app/map/services/svg_path_parser.dart';
 import 'package:rtu_mirea_app/map/services/svg_room_parser.dart';
@@ -36,12 +37,14 @@ void main() {
       start: MapRoomSearchEntry(
         roomId: 'В-78__r__2318:5274',
         name: 'А-214-2',
+        objectType: MapObjectType.room,
         campus: campus,
         floor: floor2,
       ),
       destination: MapRoomSearchEntry(
         roomId: 'В-78__r__2318:4339',
         name: 'А-421',
+        objectType: MapObjectType.room,
         campus: campus,
         floor: floor4,
       ),
@@ -139,39 +142,133 @@ void main() {
     expect(cyberzone.floor.id, 'v-78-floor1');
   });
 
-  test('parses clickable room centers for G and D buildings', () async {
-    const List<String> roomIdSuffixes = <String>[
-      '__r__2318:5038',
-      '__r__2318:5039',
-      '__r__2318:5427',
-      '__r__2318:5428',
-      '__r__2318:5439',
-      '__r__2318:5441',
-    ];
+  test('includes V-78 entrance exits in local route search data', () async {
+    final List<MapRoomSearchEntry> entries = _v78RouteableEntries(
+      await _buildSearchEntries(),
+    );
+    final List<MapRoomSearchEntry> entranceExits = entries
+        .where(
+          (MapRoomSearchEntry entry) =>
+              entry.objectType == MapObjectType.entranceExit,
+        )
+        .toList(growable: false);
 
-    final List<MapRoomSearchEntry> entries = await _buildSearchEntries();
+    expect(entranceExits, hasLength(2));
+    for (final MapRoomSearchEntry entry in entranceExits) {
+      expect(entry.name, mapEntranceExitName);
+      expect(entry.floor.id, 'v-78-floor2');
+      expect(isSyntheticEntranceExitId(entry.roomId), isTrue);
+    }
+  });
+
+  test('parses clickable centers for all V-78 routeable objects', () async {
+    final List<MapRoomSearchEntry> entries = _v78RouteableEntries(
+      await _buildSearchEntries(),
+    );
     final Map<String, List<RoomModel>> roomsByFloor =
         <String, List<RoomModel>>{};
-    for (final String roomIdSuffix in roomIdSuffixes) {
-      final MapRoomSearchEntry sample = entries.singleWhere(
-        (MapRoomSearchEntry entry) => entry.roomId.endsWith(roomIdSuffix),
-      );
+    final List<String> failures = <String>[];
+
+    for (final MapRoomSearchEntry sample in entries) {
       final List<RoomModel> floorRooms = await _roomsForFloor(
         roomsByFloor: roomsByFloor,
         floor: sample.floor,
       );
-      final RoomModel room = floorRooms.singleWhere(
-        (RoomModel room) => room.roomId == sample.roomId,
-      );
-
-      final RoomModel? selectedRoom = findRoomAtPoint(
+      final RoomModel? room = _roomById(
         rooms: floorRooms,
-        point: room.path.getBounds().center,
+        roomId: sample.roomId,
+      );
+      if (room == null) {
+        failures.add('${_entryDebugLabel(sample)}: контур не найден');
+        continue;
+      }
+
+      final Rect bounds = room.path.getBounds();
+      if (bounds.isEmpty || !_rectIsFinite(bounds)) {
+        failures.add('${_entryDebugLabel(sample)}: некорректные bounds');
+        continue;
+      }
+
+      final RoomModel? selectedObject = findRoomAtPoint(
+        rooms: floorRooms,
+        point: bounds.center,
+      );
+      if (selectedObject?.roomId != sample.roomId &&
+          !_isKnownOverlappingRouteTarget(sample.roomId)) {
+        failures.add(
+          '${_entryDebugLabel(sample)}: центр выбирает ${selectedObject?.roomId}',
+        );
+      }
+    }
+
+    expect(failures, isEmpty, reason: failures.join('\n'));
+  });
+
+  test(
+    'builds routes from anchor to V-78 canteens, entrances and smoke route targets',
+    () async {
+      final List<MapRoomSearchEntry> entries = _v78RouteableEntries(
+        await _buildSearchEntries(),
+      );
+      final MapRoomSearchEntry anchor = _singleEntryByRoomId(
+        entries: entries,
+        roomId: 'В-78__r__2318:5274',
+      );
+      final MapRoutingService routingService = MapRoutingService();
+      await routingService.preloadCampus(campus: anchor.campus);
+      final List<MapRoomSearchEntry> destinations = _routeConnectivityEntries(
+        entries: entries,
+        anchor: anchor,
       );
 
-      expect(selectedRoom?.roomId, sample.roomId);
-    }
-  });
+      expect(
+        destinations.any(
+          (MapRoomSearchEntry entry) =>
+              entry.objectType == MapObjectType.canteen,
+        ),
+        isTrue,
+      );
+      expect(
+        destinations.any(
+          (MapRoomSearchEntry entry) =>
+              entry.objectType == MapObjectType.toilet,
+        ),
+        isTrue,
+      );
+      expect(
+        destinations.any(
+          (MapRoomSearchEntry entry) =>
+              entry.objectType == MapObjectType.entranceExit,
+        ),
+        isTrue,
+      );
+      expect(
+        destinations.any(
+          (MapRoomSearchEntry entry) => entry.objectType == MapObjectType.room,
+        ),
+        isTrue,
+      );
+
+      final List<String> failures = <String>[];
+      for (final MapRoomSearchEntry destination in destinations) {
+        try {
+          final MapRouteResult route = await routingService.buildRoute(
+            start: anchor,
+            destination: destination,
+            availableCampuses: universityMapCampuses,
+          );
+          if (route.segments.isEmpty) {
+            failures.add('${_entryDebugLabel(destination)}: пустой маршрут');
+          }
+        } catch (error) {
+          failures.add('${_entryDebugLabel(destination)}: $error');
+        }
+      }
+
+      expect(failures, isEmpty, reason: failures.join('\n'));
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
 
   test('applies ancestor transforms when parsing room paths', () {
     final xml.XmlDocument document = xml.XmlDocument.parse('''
@@ -224,6 +321,35 @@ void main() {
     expect(path!.getBounds(), const Rect.fromLTWH(100, 50, 30, 40));
     expect(path.contains(const Offset(115, 70)), isTrue);
   });
+
+  test('applies rotate transforms around explicit center', () {
+    final xml.XmlDocument document = xml.XmlDocument.parse('''
+<svg viewBox="-50 0 100 100">
+  <g data-object="В-78__r__test">
+    <rect x="10" y="20" width="30" height="40" transform="rotate(90 10 20)" />
+  </g>
+</svg>
+''');
+    final xml.XmlElement svgRoot = document.findElements('svg').first;
+    final xml.XmlElement roomElement = svgRoot.descendants
+        .whereType<xml.XmlElement>()
+        .firstWhere(
+          (xml.XmlElement element) =>
+              element.getAttribute('data-object') == 'В-78__r__test',
+        );
+    final Path? path = SvgPathParser.parseElementToPath(
+      element: roomElement,
+      elementsById: SvgPathParser.collectElementsById(svgRoot),
+    );
+
+    expect(path, isNotNull);
+    final Rect bounds = path!.getBounds();
+    expect(bounds.left, moreOrLessEquals(-30));
+    expect(bounds.top, moreOrLessEquals(20));
+    expect(bounds.right, moreOrLessEquals(10));
+    expect(bounds.bottom, moreOrLessEquals(50));
+    expect(path.contains(const Offset(-10, 35)), isTrue);
+  });
 }
 
 Future<List<MapRoomSearchEntry>> _buildSearchEntries() async {
@@ -238,8 +364,15 @@ Future<List<MapRoomSearchEntry>> _buildSearchEntries() async {
       );
       for (final RoomModel room in floorData.$1) {
         final String objectId = _objectIdFromDataObject(room.roomId);
-        final String name = objectsService.getNameById(objectId) ?? '';
-        if (name.isEmpty || !objectsService.isRoom(objectId)) {
+        final String name =
+            room.name.isNotEmpty
+                ? room.name
+                : objectsService.getNameById(objectId) ?? '';
+        final MapObjectType? objectType = _routeableTypeFromDataObject(
+          objectsService: objectsService,
+          dataObject: room.roomId,
+        );
+        if (name.isEmpty || objectType == null) {
           continue;
         }
 
@@ -247,6 +380,7 @@ Future<List<MapRoomSearchEntry>> _buildSearchEntries() async {
           MapRoomSearchEntry(
             roomId: room.roomId,
             name: name,
+            objectType: objectType,
             campus: campus,
             floor: floor,
           ),
@@ -256,6 +390,39 @@ Future<List<MapRoomSearchEntry>> _buildSearchEntries() async {
   }
 
   return entries;
+}
+
+List<MapRoomSearchEntry> _v78RouteableEntries(
+  List<MapRoomSearchEntry> entries,
+) {
+  return entries
+      .where((MapRoomSearchEntry entry) => entry.campus.id == 'v-78')
+      .toList(growable: false);
+}
+
+List<MapRoomSearchEntry> _routeConnectivityEntries({
+  required List<MapRoomSearchEntry> entries,
+  required MapRoomSearchEntry anchor,
+}) {
+  const Set<String> smokeTargetIds = <String>{
+    'В-78__r__2318:4339',
+    'В-78__r__2367:8867',
+    'В-78__t__2318:5687',
+    'В-78__t__2318:5688',
+  };
+
+  return entries
+      .where(
+        (MapRoomSearchEntry entry) =>
+            entry.objectType == MapObjectType.canteen ||
+            entry.objectType == MapObjectType.entranceExit ||
+            smokeTargetIds.contains(entry.roomId),
+      )
+      .where(
+        (MapRoomSearchEntry entry) =>
+            entry.roomId != anchor.roomId || entry.floor.id != anchor.floor.id,
+      )
+      .toList(growable: false);
 }
 
 Future<List<RoomModel>> _roomsForFloor({
@@ -285,6 +452,54 @@ MapRoomSearchEntry _singleEntryByName({
   expect(matches, hasLength(1), reason: 'Expected one search entry for $name');
 
   return matches.single;
+}
+
+MapRoomSearchEntry _singleEntryByRoomId({
+  required List<MapRoomSearchEntry> entries,
+  required String roomId,
+}) {
+  final List<MapRoomSearchEntry> matches = entries
+      .where((MapRoomSearchEntry entry) => entry.roomId == roomId)
+      .toList(growable: false);
+
+  expect(
+    matches,
+    hasLength(1),
+    reason: 'Expected one search entry for $roomId',
+  );
+
+  return matches.single;
+}
+
+RoomModel? _roomById({required List<RoomModel> rooms, required String roomId}) {
+  for (final RoomModel room in rooms) {
+    if (room.roomId == roomId) {
+      return room;
+    }
+  }
+
+  return null;
+}
+
+bool _rectIsFinite(Rect rect) {
+  return rect.left.isFinite &&
+      rect.top.isFinite &&
+      rect.right.isFinite &&
+      rect.bottom.isFinite;
+}
+
+bool _isKnownOverlappingRouteTarget(String roomId) {
+  const Set<String> knownOverlappingRouteTargetIds = <String>{
+    'В-78__r__2367:8876',
+    'В-78__r__2367:8874',
+    'В-78__r__2367:8881',
+  };
+
+  return knownOverlappingRouteTargetIds.contains(roomId);
+}
+
+String _entryDebugLabel(MapRoomSearchEntry entry) {
+  return '${entry.name} ${entry.roomId} ${entry.floor.id}';
 }
 
 List<int> _routeFloorNumbers(MapRouteResult route) {
@@ -346,11 +561,27 @@ void _expectSegmentAvoidsPath({
 
 String _objectIdFromDataObject(String dataObject) {
   final RegExpMatch? match = RegExp(
-    r'__(?:r|c|s|t)__([^_]+)$',
+    r'__(?:r|c|s|t|e)__([^_]+)$',
   ).firstMatch(dataObject);
   if (match == null) {
     return '';
   }
 
   return match.group(1)!;
+}
+
+MapObjectType? _routeableTypeFromDataObject({
+  required ObjectsService objectsService,
+  required String dataObject,
+}) {
+  final MapObjectType? syntheticType = syntheticMapObjectTypeFromDataObject(
+    dataObject,
+  );
+  if (syntheticType != null) {
+    return syntheticType;
+  }
+
+  return objectsService.getRouteableTypeById(
+    _objectIdFromDataObject(dataObject),
+  );
 }

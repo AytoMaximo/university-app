@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/services.dart';
 import 'package:rtu_mirea_app/map/models/models.dart';
+import 'package:rtu_mirea_app/map/services/map_synthetic_object_service.dart';
 import 'package:rtu_mirea_app/map/services/svg_path_parser.dart';
 import 'package:xml/xml.dart' as xml;
 
@@ -17,11 +18,15 @@ class SvgRoomsParser {
         SvgPathParser.collectElementsById(svgRoot);
 
     final List<RoomModel> rooms = <RoomModel>[];
-    final Iterable<xml.XmlElement> objectElements = svgRoot.descendants
+    final List<xml.XmlElement> objectElements = svgRoot.descendants
         .whereType<xml.XmlElement>()
         .where(
           (xml.XmlElement node) => node.getAttribute('data-object') != null,
-        );
+        )
+        .toList(growable: false);
+    final Set<xml.XmlElement> dataObjectElements = _collectDataObjectElements(
+      objectElements,
+    );
 
     double globalMinX = double.infinity;
     double globalMinY = double.infinity;
@@ -49,6 +54,43 @@ class SvgRoomsParser {
       }
 
       rooms.add(RoomModel(roomId: dataRoom, path: combinedPath));
+    }
+
+    for (final xml.XmlElement element in svgRoot.descendants
+        .whereType<xml.XmlElement>()
+        .where(isSyntheticEntranceExitElement)) {
+      if (dataObjectElements.contains(element)) {
+        continue;
+      }
+
+      final ui.Path? parsedPath = SvgPathParser.parseElementToPath(
+        element: element,
+        elementsById: elementsById,
+      );
+      if (parsedPath == null) {
+        continue;
+      }
+
+      final ui.Rect bounds = parsedPath.getBounds();
+      if (bounds.isEmpty) {
+        continue;
+      }
+
+      globalMinX = math.min(globalMinX, bounds.left);
+      globalMinY = math.min(globalMinY, bounds.top);
+      globalMaxX = math.max(globalMaxX, bounds.right);
+      globalMaxY = math.max(globalMaxY, bounds.bottom);
+
+      rooms.add(
+        RoomModel(
+          roomId: syntheticEntranceExitDataObject(
+            assetPath: assetPath,
+            bounds: bounds,
+          ),
+          name: mapEntranceExitName,
+          path: parsedPath,
+        ),
+      );
     }
 
     if (rooms.isEmpty) {
@@ -83,5 +125,17 @@ class SvgRoomsParser {
     final double right = math.max(r1.right, r2.right);
     final double bottom = math.max(r1.bottom, r2.bottom);
     return ui.Rect.fromLTRB(left, top, right, bottom);
+  }
+
+  static Set<xml.XmlElement> _collectDataObjectElements(
+    List<xml.XmlElement> objectElements,
+  ) {
+    final Set<xml.XmlElement> elements = Set<xml.XmlElement>.identity();
+    for (final xml.XmlElement element in objectElements) {
+      elements.add(element);
+      elements.addAll(element.descendants.whereType<xml.XmlElement>());
+    }
+
+    return elements;
   }
 }

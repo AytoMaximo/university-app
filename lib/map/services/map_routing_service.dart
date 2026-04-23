@@ -8,6 +8,7 @@ import 'package:rtu_mirea_app/map/models/floor_model.dart';
 import 'package:rtu_mirea_app/map/models/map_room_search_entry.dart';
 import 'package:rtu_mirea_app/map/models/map_route_result.dart';
 import 'package:rtu_mirea_app/map/models/map_route_segment.dart';
+import 'package:rtu_mirea_app/map/services/map_synthetic_object_service.dart';
 import 'package:rtu_mirea_app/map/services/svg_path_parser.dart';
 import 'package:xml/xml.dart' as xml;
 
@@ -32,7 +33,7 @@ class MapRoutingService {
     }
     if (start.roomId == destination.roomId &&
         start.floor.id == destination.floor.id) {
-      throw ArgumentError('Выберите разные аудитории для маршрута.');
+      throw ArgumentError('Выберите разные объекты для маршрута.');
     }
 
     final CampusModel campus = _findCampus(
@@ -46,13 +47,13 @@ class MapRoutingService {
       graph: graph,
       floors: floors,
       entry: start,
-      label: 'начальной аудитории',
+      label: 'начального объекта',
     );
     final int destinationNode = _addEndpointNode(
       graph: graph,
       floors: floors,
       entry: destination,
-      label: 'конечной аудитории',
+      label: 'конечного объекта',
     );
     final List<int> path = _findShortestPath(
       graph: graph,
@@ -60,7 +61,7 @@ class MapRoutingService {
       destinationNode: destinationNode,
     );
     if (path.isEmpty) {
-      throw StateError('Маршрут между выбранными аудиториями не найден.');
+      throw StateError('Маршрут между выбранными объектами не найден.');
     }
 
     return MapRouteResult(
@@ -177,7 +178,7 @@ class MapRoutingService {
       walkableAreas.add(_WalkableArea(path: path, bounds: path.getBounds()));
     }
 
-    final Map<String, _RouteObject> rooms = <String, _RouteObject>{};
+    final Map<String, _RouteObject> routeTargets = <String, _RouteObject>{};
     final List<_RouteObject> stairs = <_RouteObject>[];
     final List<_BlockedArea> blockedAreas = <_BlockedArea>[];
     for (final xml.XmlElement element
@@ -204,12 +205,42 @@ class MapRoutingService {
         dataObject: dataObject,
         bounds: path.getBounds(),
       );
-      if (type == _RouteObjectType.room) {
-        rooms[dataObject] = routeObject;
+      if (type == _RouteObjectType.routeTarget) {
+        routeTargets[dataObject] = routeObject;
       } else if (type == _RouteObjectType.stairs) {
         stairs.add(routeObject);
         blockedAreas.add(_BlockedArea(path: path, bounds: path.getBounds()));
       }
+    }
+
+    for (final xml.XmlElement element in svgRoot.descendants
+        .whereType<xml.XmlElement>()
+        .where(isSyntheticEntranceExitElement)) {
+      if (dataObjectElements.contains(element)) {
+        continue;
+      }
+
+      final Path? path = SvgPathParser.parseElementToPath(
+        element: element,
+        elementsById: elementsById,
+      );
+      if (path == null) {
+        continue;
+      }
+
+      final Rect bounds = path.getBounds();
+      if (bounds.isEmpty) {
+        continue;
+      }
+
+      final String dataObject = syntheticEntranceExitDataObject(
+        assetPath: floor.svgPath,
+        bounds: bounds,
+      );
+      routeTargets[dataObject] = _RouteObject(
+        dataObject: dataObject,
+        bounds: bounds,
+      );
     }
 
     final Set<_GridKey> walkableKeys = _buildWalkableKeys(
@@ -227,7 +258,7 @@ class MapRoutingService {
       walkableAreas: walkableAreas,
       blockedAreas: blockedAreas,
       walkableKeys: walkableKeys,
-      rooms: rooms,
+      routeTargets: routeTargets,
       stairs: stairs,
     );
   }
@@ -258,7 +289,8 @@ class MapRoutingService {
       return false;
     }
 
-    return SvgPathParser.fillValue(element) == '#262a34';
+    final String? fill = SvgPathParser.fillValue(element);
+    return fill == '#262a34' || fill == '#f8f8f8';
   }
 
   bool _isShapeElement(xml.XmlElement element) {
@@ -273,8 +305,11 @@ class MapRoutingService {
   }
 
   _RouteObjectType? _parseDataObjectType(String dataObject) {
-    if (dataObject.contains('__r__')) {
-      return _RouteObjectType.room;
+    if (dataObject.contains('__r__') ||
+        dataObject.contains('__c__') ||
+        dataObject.contains('__t__') ||
+        dataObject.contains('__e__')) {
+      return _RouteObjectType.routeTarget;
     }
     if (dataObject.contains('__s__')) {
       return _RouteObjectType.stairs;
@@ -561,8 +596,8 @@ class MapRoutingService {
       floors: floors,
       floorId: entry.floor.id,
     );
-    final _RouteObject? room = floorData.rooms[entry.roomId];
-    if (room == null) {
+    final _RouteObject? routeTarget = floorData.routeTargets[entry.roomId];
+    if (routeTarget == null) {
       throw StateError('Контур $label ${entry.name} не найден на карте.');
     }
 
@@ -570,14 +605,14 @@ class MapRoutingService {
       _RouteNode(
         floorId: floorData.floor.id,
         floorNumber: floorData.floor.number,
-        point: room.bounds.center,
+        point: routeTarget.bounds.center,
         gridKey: null,
       ),
     );
     final List<_GridNodeDistance> nearbyGridNodes = _findNearbyGridNodes(
       graph: graph,
       floorData: floorData,
-      candidates: _connectionCandidates(room.bounds),
+      candidates: _connectionCandidates(routeTarget.bounds),
       maxDistance: _roomConnectionMaxDistance,
     );
     for (final _GridNodeDistance gridNode in nearbyGridNodes) {
@@ -1253,7 +1288,7 @@ class MapRoutingService {
   ];
 }
 
-enum _RouteObjectType { room, stairs }
+enum _RouteObjectType { routeTarget, stairs }
 
 class _WalkableArea {
   const _WalkableArea({required this.path, required this.bounds});
@@ -1282,7 +1317,7 @@ class _RouteFloorData {
     required this.walkableAreas,
     required this.blockedAreas,
     required this.walkableKeys,
-    required this.rooms,
+    required this.routeTargets,
     required this.stairs,
   });
 
@@ -1290,7 +1325,7 @@ class _RouteFloorData {
   final List<_WalkableArea> walkableAreas;
   final List<_BlockedArea> blockedAreas;
   final Set<_GridKey> walkableKeys;
-  final Map<String, _RouteObject> rooms;
+  final Map<String, _RouteObject> routeTargets;
   final List<_RouteObject> stairs;
 }
 

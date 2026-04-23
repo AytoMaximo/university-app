@@ -38,6 +38,16 @@ class SvgPathParser {
     required xml.XmlElement element,
     required Map<String, xml.XmlElement> elementsById,
   }) {
+    if (element.getAttribute('data-object') != null) {
+      final Path? objectSurfacePath = _parseLargestShapeToPath(
+        element: element,
+        elementsById: elementsById,
+      );
+      if (objectSurfacePath != null) {
+        return objectSurfacePath;
+      }
+    }
+
     final Path path = Path()..fillType = _parseFillType(element);
     final Matrix4 inheritedTransform = _ancestorTransform(element);
     _addElementPath(
@@ -52,6 +62,60 @@ class SvgPathParser {
     }
 
     return path;
+  }
+
+  static Path? _parseLargestShapeToPath({
+    required xml.XmlElement element,
+    required Map<String, xml.XmlElement> elementsById,
+  }) {
+    Path? largestPath;
+    double largestArea = 0;
+
+    for (final xml.XmlElement candidate in _shapeElementsForObject(element)) {
+      final Matrix4 transform = _combinedTransform(
+        _ancestorTransform(candidate),
+        candidate.getAttribute('transform'),
+      );
+      final Path? path = _parseShapeToPath(
+        element: candidate,
+        elementsById: elementsById,
+        transform: transform,
+      );
+      if (path == null) {
+        continue;
+      }
+
+      final Rect bounds = path.getBounds();
+      if (bounds.isEmpty) {
+        continue;
+      }
+
+      final double area = bounds.width * bounds.height;
+      if (area <= largestArea) {
+        continue;
+      }
+
+      largestArea = area;
+      largestPath = path;
+    }
+
+    return largestPath;
+  }
+
+  static List<xml.XmlElement> _shapeElementsForObject(xml.XmlElement element) {
+    final List<xml.XmlElement> shapeElements = <xml.XmlElement>[];
+    if (_isShapeElement(element)) {
+      shapeElements.add(element);
+    }
+
+    for (final xml.XmlElement descendant
+        in element.descendants.whereType<xml.XmlElement>()) {
+      if (_isShapeElement(descendant)) {
+        shapeElements.add(descendant);
+      }
+    }
+
+    return shapeElements;
   }
 
   static String? fillValue(xml.XmlElement element) {
@@ -124,15 +188,17 @@ class SvgPathParser {
           break;
         case 'rotate':
           if (values.length == 1) {
-            current.rotateZ(_degreesToRadians(values[0]));
+            current = _rotationMatrix(
+              radians: _degreesToRadians(values[0]),
+              centerX: 0,
+              centerY: 0,
+            );
           } else if (values.length == 3) {
-            final double angle = _degreesToRadians(values[0]);
-            final double cx = values[1];
-            final double cy = values[2];
-            current
-              ..translateByDouble(cx, cy, 0, 1)
-              ..rotateZ(angle)
-              ..translateByDouble(-cx, -cy, 0, 1);
+            current = _rotationMatrix(
+              radians: _degreesToRadians(values[0]),
+              centerX: values[1],
+              centerY: values[2],
+            );
           }
           break;
         case 'skewX':
@@ -269,6 +335,17 @@ class SvgPathParser {
     }
 
     return path.transform(transform.storage);
+  }
+
+  static bool _isShapeElement(xml.XmlElement element) {
+    final String tag = element.name.local.toLowerCase();
+    return tag == 'path' ||
+        tag == 'rect' ||
+        tag == 'circle' ||
+        tag == 'ellipse' ||
+        tag == 'polygon' ||
+        tag == 'polyline' ||
+        tag == 'use';
   }
 
   static Path? _parseRect(xml.XmlElement element) {
@@ -424,5 +501,34 @@ class SvgPathParser {
 
   static double _degreesToRadians(double degrees) {
     return degrees * math.pi / 180;
+  }
+
+  static Matrix4 _rotationMatrix({
+    required double radians,
+    required double centerX,
+    required double centerY,
+  }) {
+    final double cosine = math.cos(radians);
+    final double sine = math.sin(radians);
+    final double translateX = centerX - cosine * centerX + sine * centerY;
+    final double translateY = centerY - sine * centerX - cosine * centerY;
+    return Matrix4.identity()..setValues(
+      cosine,
+      sine,
+      0,
+      0,
+      -sine,
+      cosine,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      translateX,
+      translateY,
+      0,
+      1,
+    );
   }
 }

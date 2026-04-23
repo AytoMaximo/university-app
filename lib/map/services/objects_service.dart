@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:app_ui/src/generated/generated.dart';
 import 'package:flutter/services.dart';
+import 'package:rtu_mirea_app/map/models/map_room_search_entry.dart';
 
 class ObjectsService {
   final Map<String, String> _idToNameMap = <String, String>{};
@@ -45,7 +46,16 @@ class ObjectsService {
     return _idToNameMap[id];
   }
 
+  MapObjectType? getRouteableTypeById(String id) {
+    final String? type = _idToTypeMap[id];
+    if (type == null) {
+      return null;
+    }
+
+    return mapObjectTypeFromRawValue(type);
+  }
+
   bool isRoom(String id) {
-    return _idToTypeMap[id] == 'room';
+    return getRouteableTypeById(id) == MapObjectType.room;
   }
 }

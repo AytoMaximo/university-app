@@ -46,7 +46,7 @@ RoomModel _nearestRoomToPoint({
 
   final RoomModel? room = selectedRoom;
   if (room == null) {
-    throw StateError('Не удалось выбрать аудиторию в точке $point.');
+    throw StateError('Не удалось выбрать объект в точке $point.');
   }
 
   return room;
