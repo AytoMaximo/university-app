@@ -159,10 +159,12 @@ class MapRoutingService {
         SvgPathParser.collectElementsById(svgRoot);
     final HashSet<xml.XmlElement> dataObjectElements =
         _collectDataObjectElements(svgRoot);
+    final List<xml.XmlElement> svgElements = svgRoot.descendants
+        .whereType<xml.XmlElement>()
+        .toList(growable: false);
 
     final List<_WalkableArea> walkableAreas = <_WalkableArea>[];
-    for (final xml.XmlElement element
-        in svgRoot.descendants.whereType<xml.XmlElement>()) {
+    for (final xml.XmlElement element in svgElements) {
       if (!_isWalkableElement(element, dataObjectElements)) {
         continue;
       }
@@ -181,8 +183,7 @@ class MapRoutingService {
     final Map<String, _RouteObject> routeTargets = <String, _RouteObject>{};
     final List<_RouteObject> stairs = <_RouteObject>[];
     final List<_BlockedArea> blockedAreas = <_BlockedArea>[];
-    for (final xml.XmlElement element
-        in svgRoot.descendants.whereType<xml.XmlElement>()) {
+    for (final xml.XmlElement element in svgElements) {
       final String? dataObject = element.getAttribute('data-object');
       if (dataObject == null) {
         continue;
@@ -207,9 +208,20 @@ class MapRoutingService {
       );
       if (type == _RouteObjectType.routeTarget) {
         routeTargets[dataObject] = routeObject;
+        if (!_isWalkableRouteTarget(dataObject)) {
+          blockedAreas.add(
+            _BlockedArea(
+              path: path,
+              bounds: path.getBounds(),
+              label: dataObject,
+            ),
+          );
+        }
       } else if (type == _RouteObjectType.stairs) {
         stairs.add(routeObject);
-        blockedAreas.add(_BlockedArea(path: path, bounds: path.getBounds()));
+        blockedAreas.add(
+          _BlockedArea(path: path, bounds: path.getBounds(), label: dataObject),
+        );
       }
     }
 
@@ -240,6 +252,40 @@ class MapRoutingService {
       routeTargets[dataObject] = _RouteObject(
         dataObject: dataObject,
         bounds: bounds,
+      );
+    }
+
+    for (int index = 0; index < svgElements.length; index += 1) {
+      final xml.XmlElement element = svgElements[index];
+      if (!_isBlockedRectangleElement(element, dataObjectElements)) {
+        continue;
+      }
+
+      final Path? path = SvgPathParser.parseElementToPath(
+        element: element,
+        elementsById: elementsById,
+      );
+      if (path == null) {
+        continue;
+      }
+      final Rect bounds = path.getBounds();
+      if (bounds.isEmpty ||
+          _hasLaterWalkableElementAtPoint(
+            elements: svgElements,
+            startIndex: index + 1,
+            point: bounds.center,
+            dataObjectElements: dataObjectElements,
+            elementsById: elementsById,
+          )) {
+        continue;
+      }
+
+      blockedAreas.add(
+        _BlockedArea(
+          path: path,
+          bounds: bounds,
+          label: _blockedRectangleLabel(bounds),
+        ),
       );
     }
 
@@ -290,7 +336,87 @@ class MapRoutingService {
     }
 
     final String? fill = SvgPathParser.fillValue(element);
-    return fill == '#262a34' || fill == '#f8f8f8';
+    return _isWalkableFill(fill);
+  }
+
+  bool _isWalkableFill(String? fill) {
+    return fill == '#262a34' || fill == '#f8f8f8' || fill == '#22c55e';
+  }
+
+  bool _isWalkableRouteTarget(String dataObject) {
+    return syntheticMapObjectTypeFromDataObject(dataObject) ==
+        MapObjectType.entranceExit;
+  }
+
+  bool _isBlockedRectangleElement(
+    xml.XmlElement element,
+    HashSet<xml.XmlElement> dataObjectElements,
+  ) {
+    if (dataObjectElements.contains(element)) {
+      return false;
+    }
+    if (_isInsideSvgDefinitionElement(element)) {
+      return false;
+    }
+    if (element.name.local.toLowerCase() != 'rect') {
+      return false;
+    }
+
+    final String? fill = SvgPathParser.fillValue(element);
+    if (fill == null) {
+      return false;
+    }
+
+    return !_isWalkableFill(fill);
+  }
+
+  bool _isInsideSvgDefinitionElement(xml.XmlElement element) {
+    xml.XmlNode? parent = element.parent;
+    while (parent is xml.XmlElement) {
+      final String tag = parent.name.local.toLowerCase();
+      if (tag == 'defs' ||
+          tag == 'clippath' ||
+          tag == 'mask' ||
+          tag == 'pattern' ||
+          tag == 'symbol' ||
+          tag == 'filter' ||
+          tag == 'lineargradient' ||
+          tag == 'radialgradient') {
+        return true;
+      }
+
+      parent = parent.parent;
+    }
+
+    return false;
+  }
+
+  bool _hasLaterWalkableElementAtPoint({
+    required List<xml.XmlElement> elements,
+    required int startIndex,
+    required Offset point,
+    required HashSet<xml.XmlElement> dataObjectElements,
+    required Map<String, xml.XmlElement> elementsById,
+  }) {
+    for (int index = startIndex; index < elements.length; index += 1) {
+      final xml.XmlElement element = elements[index];
+      if (!_isWalkableElement(element, dataObjectElements)) {
+        continue;
+      }
+
+      final Path? path = SvgPathParser.parseElementToPath(
+        element: element,
+        elementsById: elementsById,
+      );
+      if (path == null) {
+        continue;
+      }
+      if (path.getBounds().contains(point) && path.contains(point)) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   bool _isShapeElement(xml.XmlElement element) {
@@ -657,12 +783,21 @@ class MapRoutingService {
             gridKey: null,
           ),
         );
-        final List<_GridNodeDistance> nearbyGridNodes = _findNearbyGridNodes(
-          graph: graph,
-          floorData: floorData,
-          candidates: _connectionCandidates(stair.bounds),
-          maxDistance: _stairConnectionMaxDistance,
-        );
+        final List<_GridNodeDistance> nearbyGridNodes;
+        try {
+          nearbyGridNodes = _findNearbyGridNodes(
+            graph: graph,
+            floorData: floorData,
+            candidates: _connectionCandidates(stair.bounds),
+            maxDistance: _stairConnectionMaxDistance,
+          );
+        } on StateError catch (error) {
+          throw StateError(
+            'Не найден ближайший коридор для лестницы ${stair.dataObject} '
+            'на этаже ${floorData.floor.number}: $error. '
+            '${_stairConnectionDebug(floorData: floorData, bounds: stair.bounds)}',
+          );
+        }
         for (final _GridNodeDistance gridNode in nearbyGridNodes) {
           graph.addEdge(
             from: nodeIndex,
@@ -1212,6 +1347,94 @@ class MapRoutingService {
     return blockedArea.path.contains(allowedPoint);
   }
 
+  String _stairConnectionDebug({
+    required _RouteFloorData floorData,
+    required Rect bounds,
+  }) {
+    final List<Offset> candidates = _connectionCandidates(bounds);
+    final int maxGridOffset = (_stairConnectionMaxDistance / _gridStep).ceil();
+    int rawWalkableCount = 0;
+    int retainedWalkableCount = 0;
+    double nearestRawWalkableDistance = double.infinity;
+    double nearestRetainedWalkableDistance = double.infinity;
+    final Set<String> blockerLabels = <String>{};
+
+    for (final Offset candidate in candidates) {
+      final int centerX = (candidate.dx / _gridStep).round();
+      final int centerY = (candidate.dy / _gridStep).round();
+      for (int dx = -maxGridOffset; dx <= maxGridOffset; dx += 1) {
+        for (int dy = -maxGridOffset; dy <= maxGridOffset; dy += 1) {
+          final _GridKey key = _GridKey(x: centerX + dx, y: centerY + dy);
+          final Offset point = _pointFromKey(key);
+          final double distance = (point - candidate).distance;
+          if (distance > _stairConnectionMaxDistance) {
+            continue;
+          }
+
+          if (_pointIsInsideWalkableAreas(
+            point: point,
+            walkableAreas: floorData.walkableAreas,
+          )) {
+            rawWalkableCount += 1;
+            nearestRawWalkableDistance = math.min(
+              nearestRawWalkableDistance,
+              distance,
+            );
+          }
+          if (floorData.walkableKeys.contains(key)) {
+            retainedWalkableCount += 1;
+            nearestRetainedWalkableDistance = math.min(
+              nearestRetainedWalkableDistance,
+              distance,
+            );
+          }
+
+          final _BlockedArea? blockedArea = _blockedAreaAtPoint(
+            point: point,
+            blockedAreas: floorData.blockedAreas,
+          );
+          if (blockedArea != null) {
+            blockerLabels.add(blockedArea.label);
+          }
+        }
+      }
+    }
+
+    final String nearestRaw =
+        nearestRawWalkableDistance.isFinite
+            ? nearestRawWalkableDistance.toStringAsFixed(1)
+            : 'none';
+    final String nearestRetained =
+        nearestRetainedWalkableDistance.isFinite
+            ? nearestRetainedWalkableDistance.toStringAsFixed(1)
+            : 'none';
+    final String blockers = blockerLabels.take(6).join(', ');
+    return 'rawWalkable=$rawWalkableCount, retainedWalkable='
+        '$retainedWalkableCount, nearestRaw=$nearestRaw, '
+        'nearestRetained=$nearestRetained, blockers=[$blockers]';
+  }
+
+  _BlockedArea? _blockedAreaAtPoint({
+    required Offset point,
+    required List<_BlockedArea> blockedAreas,
+  }) {
+    for (final _BlockedArea blockedArea in blockedAreas) {
+      if (!blockedArea.bounds.contains(point)) {
+        continue;
+      }
+      if (blockedArea.path.contains(point)) {
+        return blockedArea;
+      }
+    }
+
+    return null;
+  }
+
+  String _blockedRectangleLabel(Rect bounds) {
+    return 'rect:${bounds.left.round()}:${bounds.top.round()}:'
+        '${bounds.width.round()}:${bounds.height.round()}';
+  }
+
   bool _pointIsWalkable({
     required Offset point,
     required Set<_GridKey> walkableKeys,
@@ -1262,7 +1485,7 @@ class MapRoutingService {
     return Offset(key.x * _gridStep, key.y * _gridStep);
   }
 
-  static const double _gridStep = 24;
+  static const double _gridStep = 16;
   static const double _stairCoordinateMatchingTolerance = 80;
   static const double _roomConnectionMaxDistance = 360;
   static const double _stairConnectionMaxDistance = 240;
@@ -1270,7 +1493,7 @@ class MapRoutingService {
   static const double _floorTransferWeight = 420;
   static const double _walkableComponentBridgeDistance = 336;
   static const double _walkableComponentBridgeWeightMultiplier = 2;
-  static const int _minimumWalkableComponentSize = 12;
+  static const int _minimumWalkableComponentSize = 4;
   static const int _maximumConnectionNodeCount = 12;
   static final Set<String> _manualStairLinkIds = <String>{
     '2318:6530|2318:5360',
@@ -1298,10 +1521,15 @@ class _WalkableArea {
 }
 
 class _BlockedArea {
-  const _BlockedArea({required this.path, required this.bounds});
+  const _BlockedArea({
+    required this.path,
+    required this.bounds,
+    required this.label,
+  });
 
   final Path path;
   final Rect bounds;
+  final String label;
 }
 
 class _RouteObject {

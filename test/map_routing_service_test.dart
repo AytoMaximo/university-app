@@ -161,6 +161,41 @@ void main() {
     }
   });
 
+  test(
+    'builds route from main entrance to E-8 through outdoor paths',
+    () async {
+      final List<MapRoomSearchEntry> entries = _v78RouteableEntries(
+        await _buildSearchEntries(),
+      );
+      final MapRoomSearchEntry mainEntrance = await _rightmostEntranceExitEntry(
+        entries: entries,
+      );
+      final MapRoomSearchEntry e8 = _singleEntryByRoomId(
+        entries: entries,
+        roomId: 'В-78__r__2318:5524',
+      );
+      final MapRoutingService routingService = MapRoutingService();
+
+      final MapRouteResult route = await routingService.buildRoute(
+        start: mainEntrance,
+        destination: e8,
+        availableCampuses: universityMapCampuses,
+      );
+
+      expect(_routeFloorNumbers(route), <int>[2]);
+
+      final MapRouteSegment floor2Segment = route.segments.single;
+      final List<Path> blockedPaths = await _blockedPathsForFloor(
+        floor: e8.floor,
+        excludedDataObjects: <String>{e8.roomId},
+      );
+      _expectSegmentAvoidsPaths(
+        segment: floor2Segment,
+        blockedPaths: blockedPaths,
+      );
+    },
+  );
+
   test('parses clickable centers for all V-78 routeable objects', () async {
     final List<MapRoomSearchEntry> entries = _v78RouteableEntries(
       await _buildSearchEntries(),
@@ -471,6 +506,41 @@ MapRoomSearchEntry _singleEntryByRoomId({
   return matches.single;
 }
 
+Future<MapRoomSearchEntry> _rightmostEntranceExitEntry({
+  required List<MapRoomSearchEntry> entries,
+}) async {
+  final List<MapRoomSearchEntry> entranceExits = entries
+      .where(
+        (MapRoomSearchEntry entry) =>
+            entry.objectType == MapObjectType.entranceExit,
+      )
+      .toList(growable: false);
+  expect(entranceExits, hasLength(2));
+
+  final Map<String, List<RoomModel>> roomsByFloor = <String, List<RoomModel>>{};
+  MapRoomSearchEntry? result;
+  double resultCenterX = -double.infinity;
+  for (final MapRoomSearchEntry entry in entranceExits) {
+    final List<RoomModel> floorRooms = await _roomsForFloor(
+      roomsByFloor: roomsByFloor,
+      floor: entry.floor,
+    );
+    final RoomModel? room = _roomById(rooms: floorRooms, roomId: entry.roomId);
+    expect(room, isNotNull);
+
+    final double centerX = room!.path.getBounds().center.dx;
+    if (centerX <= resultCenterX) {
+      continue;
+    }
+
+    result = entry;
+    resultCenterX = centerX;
+  }
+
+  expect(result, isNotNull);
+  return result!;
+}
+
 RoomModel? _roomById({required List<RoomModel> rooms, required String roomId}) {
   for (final RoomModel room in rooms) {
     if (room.roomId == roomId) {
@@ -538,6 +608,202 @@ Future<Path> _pathByDataObjectSuffix({
   return path!;
 }
 
+Future<List<Path>> _blockedPathsForFloor({
+  required FloorModel floor,
+  required Set<String> excludedDataObjects,
+}) async {
+  final String svgString = await rootBundle.loadString(floor.svgPath);
+  final xml.XmlDocument document = xml.XmlDocument.parse(svgString);
+  final xml.XmlElement svgRoot = document.findElements('svg').first;
+  final Map<String, xml.XmlElement> elementsById =
+      SvgPathParser.collectElementsById(svgRoot);
+  final List<xml.XmlElement> svgElements = svgRoot.descendants
+      .whereType<xml.XmlElement>()
+      .toList(growable: false);
+  final Set<xml.XmlElement> dataObjectElements = _collectDataObjectElements(
+    svgRoot,
+  );
+  final List<Path> paths = <Path>[];
+
+  for (final xml.XmlElement element in svgElements) {
+    final String? dataObject = element.getAttribute('data-object');
+    if (dataObject == null ||
+        excludedDataObjects.contains(dataObject) ||
+        !_isRouteObstacleDataObject(dataObject)) {
+      continue;
+    }
+
+    final Path? path = SvgPathParser.parseElementToPath(
+      element: element,
+      elementsById: elementsById,
+    );
+    if (path != null) {
+      paths.add(path);
+    }
+  }
+
+  for (int index = 0; index < svgElements.length; index += 1) {
+    final xml.XmlElement element = svgElements[index];
+    if (!_isStandaloneBlockedRectangleElement(element, dataObjectElements)) {
+      continue;
+    }
+
+    final Path? path = SvgPathParser.parseElementToPath(
+      element: element,
+      elementsById: elementsById,
+    );
+    if (path == null) {
+      continue;
+    }
+    final Rect bounds = path.getBounds();
+    if (bounds.isEmpty ||
+        _hasLaterWalkableElementAtPoint(
+          elements: svgElements,
+          startIndex: index + 1,
+          point: bounds.center,
+          dataObjectElements: dataObjectElements,
+          elementsById: elementsById,
+        )) {
+      continue;
+    }
+
+    paths.add(path);
+  }
+
+  return paths;
+}
+
+Set<xml.XmlElement> _collectDataObjectElements(xml.XmlElement svgRoot) {
+  final Set<xml.XmlElement> elements = Set<xml.XmlElement>.identity();
+  for (final xml.XmlElement element
+      in svgRoot.descendants.whereType<xml.XmlElement>()) {
+    if (element.getAttribute('data-object') == null) {
+      continue;
+    }
+
+    elements.add(element);
+    elements.addAll(element.descendants.whereType<xml.XmlElement>());
+  }
+
+  return elements;
+}
+
+bool _isRouteObstacleDataObject(String dataObject) {
+  return dataObject.contains('__r__') ||
+      dataObject.contains('__c__') ||
+      dataObject.contains('__t__') ||
+      dataObject.contains('__s__');
+}
+
+bool _isStandaloneBlockedRectangleElement(
+  xml.XmlElement element,
+  Set<xml.XmlElement> dataObjectElements,
+) {
+  if (dataObjectElements.contains(element)) {
+    return false;
+  }
+  if (_isInsideSvgDefinitionElement(element)) {
+    return false;
+  }
+  if (element.name.local.toLowerCase() != 'rect') {
+    return false;
+  }
+
+  final String? fill = SvgPathParser.fillValue(element);
+  if (fill == null) {
+    return false;
+  }
+
+  return !_isTestWalkableFill(fill);
+}
+
+bool _isInsideSvgDefinitionElement(xml.XmlElement element) {
+  xml.XmlNode? parent = element.parent;
+  while (parent is xml.XmlElement) {
+    final String tag = parent.name.local.toLowerCase();
+    if (tag == 'defs' ||
+        tag == 'clippath' ||
+        tag == 'mask' ||
+        tag == 'pattern' ||
+        tag == 'symbol' ||
+        tag == 'filter' ||
+        tag == 'lineargradient' ||
+        tag == 'radialgradient') {
+      return true;
+    }
+
+    parent = parent.parent;
+  }
+
+  return false;
+}
+
+bool _hasLaterWalkableElementAtPoint({
+  required List<xml.XmlElement> elements,
+  required int startIndex,
+  required Offset point,
+  required Set<xml.XmlElement> dataObjectElements,
+  required Map<String, xml.XmlElement> elementsById,
+}) {
+  for (int index = startIndex; index < elements.length; index += 1) {
+    final xml.XmlElement element = elements[index];
+    if (!_isTestWalkableElement(element, dataObjectElements)) {
+      continue;
+    }
+
+    final Path? path = SvgPathParser.parseElementToPath(
+      element: element,
+      elementsById: elementsById,
+    );
+    if (path == null) {
+      continue;
+    }
+    if (path.getBounds().contains(point) && path.contains(point)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool _isTestWalkableElement(
+  xml.XmlElement element,
+  Set<xml.XmlElement> dataObjectElements,
+) {
+  if (dataObjectElements.contains(element)) {
+    return false;
+  }
+  if (!_isTestShapeElement(element)) {
+    return false;
+  }
+
+  return _isTestWalkableFill(SvgPathParser.fillValue(element));
+}
+
+bool _isTestShapeElement(xml.XmlElement element) {
+  final String tag = element.name.local.toLowerCase();
+  return tag == 'path' ||
+      tag == 'rect' ||
+      tag == 'circle' ||
+      tag == 'ellipse' ||
+      tag == 'polygon' ||
+      tag == 'polyline' ||
+      tag == 'use';
+}
+
+bool _isTestWalkableFill(String? fill) {
+  return fill == '#262a34' || fill == '#f8f8f8' || fill == '#22c55e';
+}
+
+void _expectSegmentAvoidsPaths({
+  required MapRouteSegment segment,
+  required List<Path> blockedPaths,
+}) {
+  for (final Path blockedPath in blockedPaths) {
+    _expectSegmentAvoidsPath(segment: segment, blockedPath: blockedPath);
+  }
+}
+
 void _expectSegmentAvoidsPath({
   required MapRouteSegment segment,
   required Path blockedPath,
@@ -553,7 +819,7 @@ void _expectSegmentAvoidsPath({
         blockedPath.contains(point),
         isFalse,
         reason:
-            'Route segment ${segment.floorNumber} crosses unused stair at $point',
+            'Route segment ${segment.floorNumber} crosses blocker at $point',
       );
     }
   }
