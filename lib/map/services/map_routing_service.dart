@@ -637,14 +637,20 @@ class MapRoutingService {
 
           final Offset sourcePoint = _pointFromKey(sourceKey);
           final Offset targetPoint = _pointFromKey(targetKey);
-          if (!_lineIsInsideWalkableAreas(
-            start: sourcePoint,
-            end: targetPoint,
-            walkableAreas: floorData.walkableAreas,
-            blockedAreas: floorData.blockedAreas,
-            allowedStart: null,
-            allowedEnd: null,
-          )) {
+          final bool canConnectByManualPair =
+              _canConnectWalkableComponentsByManualPair(
+                sourceKey: sourceKey,
+                targetKey: targetKey,
+              );
+          if (!canConnectByManualPair &&
+              !_lineIsInsideWalkableAreas(
+                start: sourcePoint,
+                end: targetPoint,
+                walkableAreas: floorData.walkableAreas,
+                blockedAreas: floorData.blockedAreas,
+                allowedStart: null,
+                allowedEnd: null,
+              )) {
             continue;
           }
 
@@ -679,6 +685,22 @@ class MapRoutingService {
         weight: bridge.distance * _walkableComponentBridgeWeightMultiplier,
       );
     }
+  }
+
+  bool _canConnectWalkableComponentsByManualPair({
+    required _GridKey sourceKey,
+    required _GridKey targetKey,
+  }) {
+    return _manualWalkableBridgeIds.contains(
+          _manualWalkableBridgeId(sourceKey, targetKey),
+        ) ||
+        _manualWalkableBridgeIds.contains(
+          _manualWalkableBridgeId(targetKey, sourceKey),
+        );
+  }
+
+  String _manualWalkableBridgeId(_GridKey firstKey, _GridKey secondKey) {
+    return '${firstKey.x}:${firstKey.y}|${secondKey.x}:${secondKey.y}';
   }
 
   Set<_GridKey> _bridgeCandidateKeys({
@@ -1811,6 +1833,10 @@ class MapRoutingService {
   static final Set<String> _manualStairLinkIds = <String>{
     '2318:6530|2318:5360',
     '2318:4486|2318:4298',
+  };
+  // Ручные стыки нужны там, где SVG разрывает открытый проход на отдельные walkable-компоненты.
+  static final Set<String> _manualWalkableBridgeIds = <String>{
+    '233:282|237:297',
   };
   static const Map<String, String> _prebuiltGraphAssetPaths = <String, String>{
     'v-78': 'assets/map_routing/v-78.json',

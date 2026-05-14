@@ -83,6 +83,20 @@ void main() {
     expect(floorNumbers.last, 4);
   });
 
+  test('builds route between A-214-2 and I-205-b', () async {
+    final List<MapRoomSearchEntry> entries = await _buildSearchEntries();
+    final MapRoutingService routingService = MapRoutingService();
+
+    final MapRouteResult route = await routingService.buildRoute(
+      start: _singleEntryByName(entries: entries, name: 'А-214-2'),
+      destination: _singleEntryByName(entries: entries, name: 'И-205-б'),
+      availableCampuses: universityMapCampuses,
+    );
+
+    expect(_routeFloorNumbers(route), <int>[2]);
+    expect(route.segments.single.points, isNotEmpty);
+  });
+
   test('builds route between A-214-2 and Cyberzone', () async {
     final List<MapRoomSearchEntry> entries = await _buildSearchEntries();
     final MapRoutingService routingService = MapRoutingService();
